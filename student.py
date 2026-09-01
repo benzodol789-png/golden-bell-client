@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox
 
 import socketio
 
+import theme    # 🎨 ระบบธีม มืด/สว่าง
 import updater  # 🔄 ระบบอัพเดทโปรแกรมจาก GitHub Releases
 
 updater.cleanup_old()  # ลบไฟล์ .old ที่ค้างจากการอัพเดทรอบก่อน
@@ -214,22 +215,8 @@ def stop_alert():
 
 
 # ========== ธีมสี — มืด น้ำเงิน ขอบทอง หรูหรา ==========
-C = {
-    "bg": "#0A0F1E",
-    "panel": "#0E1730",
-    "card": "#13214A",
-    "card_dark": "#0D1838",
-    "gold": "#D4AF37",
-    "gold_light": "#F1D97C",
-    "blue": "#1E3A8A",
-    "blue_hover": "#2B4CC0",
-    "text": "#F4F1E8",
-    "muted": "#93A0C4",
-    "green": "#34D399",
-    "amber": "#FBBF24",
-    "red": "#F87171",
-    "shadow": "#04070F",
-}
+theme.init(theme.load_saved())  # โหลดธีมที่ผู้ใช้เลือกไว้ก่อนสร้างหน้าต่าง
+C = theme.C  # ชุดสีปัจจุบัน — เปลี่ยนค่าในตัวเองเมื่อสลับธีม
 
 F_TITLE = ("Segoe UI", 18, "bold")
 F_HEAD = ("Segoe UI", 14, "bold")
@@ -248,19 +235,15 @@ def round_points(x1, y1, x2, y2, r):
 class GoldButton(tk.Canvas):
     """ปุ่มขอบมน มีเงาให้ความรู้สึกมีมิติ กดแล้วยุบตัวลง"""
 
-    KINDS = {
-        "gold": {"fill": "#C9A227", "hover": "#E3BD3F", "fg": "#101A33", "outline": "#F1D97C"},
-        "blue": {"fill": "#1E3A8A", "hover": "#2B4CC0", "fg": "#F4F1E8", "outline": "#D4AF37"},
-        "dark": {"fill": "#152246", "hover": "#1D2F60", "fg": "#D8DCEA", "outline": "#5A6A96"},
-        "green": {"fill": "#166534", "hover": "#1E8A47", "fg": "#EBFBF1", "outline": "#F1D97C"},
-    }
+    _all = []  # ปุ่มทุกตัวที่สร้างไว้ — ใช้ทาสีใหม่ตอนสลับธีม
 
     def __init__(self, master, text, command=None, w=190, h=46, kind="blue",
                  font=F_BOLD, bg=None):
         super().__init__(master, width=w, height=h + 4, bg=bg or master["bg"],
                          highlightthickness=0, bd=0, cursor="hand2")
         self.command = command
-        self.k = self.KINDS[kind]
+        self.kind = kind
+        self.k = theme.BUTTON_KINDS[kind]
         self.w, self.h = w, h
         r = h // 2 - 4
         self.create_polygon(round_points(3, 7, w - 3, h + 1, r),
@@ -273,6 +256,17 @@ class GoldButton(tk.Canvas):
         self.bind("<Leave>", lambda e: self._reset())
         self.bind("<ButtonPress-1>", self._press)
         self.bind("<ButtonRelease-1>", self._release)
+        GoldButton._all.append(self)
+
+    def restyle(self):
+        # ทาสีใหม่ตามธีมปัจจุบัน (Canvas วาดเอง ระบบธีมจึงเปลี่ยนให้ไม่ได้)
+        self.k = theme.BUTTON_KINDS[self.kind]
+        self.itemconfig(self.body, fill=self.k["fill"], outline=self.k["outline"])
+        self.itemconfig(self.label, fill=self.k["fg"])
+        try:
+            self.configure(bg=self.master["bg"])
+        except Exception:
+            pass
 
     def _reset(self):
         self.itemconfig(self.body, fill=self.k["fill"])
@@ -314,8 +308,7 @@ STATUS_TH = {
 # ========== หน้าต่างหลัก ==========
 root = tk.Tk()
 root.title(f"🔔 {APP_NAME} — พนักงาน")
-root.geometry("620x680")
-root.resizable(False, False)
+root.resizable(True, True)  # ขนาดจริงคำนวณจากเนื้อหาใน refit()
 root.configure(bg=C["bg"])
 
 try:
@@ -380,6 +373,37 @@ def run_update():
         on_finish=lambda: update_btn.config(state="normal"),
     )
 
+
+# ✅ ปุ่มสลับธีม มืด/สว่าง — จำค่าที่เลือกไว้ให้เอง
+def _theme_label():
+    return "☀️ ธีมสว่าง" if theme.current() == "dark" else "🌙 ธีมมืด"
+
+
+def toggle_theme():
+    theme.apply(root, "light" if theme.current() == "dark" else "dark")
+    theme_btn.config(text=_theme_label())
+    refit()
+
+
+theme_btn = tk.Button(_update_bar, text="", font=F_SMALL, bg=C["bg"], fg=C["muted"],
+                      activebackground=C["bg"], activeforeground=C["gold"],
+                      relief="flat", bd=0, cursor="hand2", command=lambda: toggle_theme())
+theme_btn.pack(side="left", padx=(14, 0))
+theme_btn.config(text=_theme_label())
+
+
+def _restyle_tables():
+    # ttk เปลี่ยนสีผ่าน style เท่านั้น — ต้องตั้งใหม่ทุกครั้งที่สลับธีม
+    style.configure("Odol.Treeview", background=C["card_dark"], fieldbackground=C["card_dark"],
+                    foreground=C["text"])
+    style.configure("Odol.Treeview.Heading", background=C["card_dark"], foreground=C["gold_light"])
+    style.map("Odol.Treeview", background=[("selected", C["blue_hover"])])
+    style.map("Odol.Treeview.Heading", background=[("active", C["card_dark"])])
+
+
+theme.on_change(_restyle_tables)
+theme.on_change(lambda: [b.restyle() for b in GoldButton._all])
+
 # ---------- สไตล์ตาราง ----------
 style = ttk.Style()
 style.theme_use("clam")
@@ -398,7 +422,7 @@ name_card = RoundedCard(lobby, 560, 100, fill=C["panel"])
 name_card.pack(pady=(16, 4))
 tk.Label(name_card.inner, text="👤 ชื่อ:", font=F_BOLD,
          bg=C["panel"], fg=C["text"]).pack(side="left", padx=(4, 10))
-name_entry = tk.Entry(name_card.inner, font=F_NORMAL, width=26, bg="#0A1228",
+name_entry = tk.Entry(name_card.inner, font=F_NORMAL, width=26, bg=C["field"],
                       fg=C["text"], insertbackground=C["gold"], relief="flat", bd=10)
 name_entry.pack(side="left")
 _saved_name = load_saved_name()
@@ -428,7 +452,7 @@ net_row = tk.Frame(lobby, bg=C["bg"])
 net_row.pack()
 tk.Label(net_row, text="🌐 ไม่เจอเซิร์ฟ? ใส่ IP หรือลิงก์:", font=F_SMALL,
          bg=C["bg"], fg=C["muted"]).pack(side="left", padx=(0, 8))
-ip_entry = tk.Entry(net_row, font=F_SMALL, width=22, bg="#0A1228", fg=C["text"],
+ip_entry = tk.Entry(net_row, font=F_SMALL, width=22, bg=C["field"], fg=C["text"],
                     insertbackground=C["gold"], relief="flat", bd=6)
 ip_entry.pack(side="left", padx=(0, 8))
 ip_entry.bind("<KeyRelease>", lambda e: state.update(manual_ip=ip_entry.get().strip()))
@@ -462,9 +486,15 @@ tk.Label(room_view, text="🔔 เมื่อแอดมินเรียก�
          font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack()
 
 
+def refit():
+    # ปรับขนาดหน้าต่างให้พอดีกับหน้าที่กำลังแสดง (เนื้อหาแต่ละหน้าสูงไม่เท่ากัน)
+    theme.fit_window(root, min_w=600, min_h=560, pad_h=8)
+
+
 def show_lobby():
     room_view.pack_forget()
     lobby.pack(fill="both", expand=True)
+    refit()
 
 
 def show_room(room):
@@ -472,6 +502,7 @@ def show_room(room):
     room_view.pack(fill="both", expand=True)
     room_name_label.config(text=f"📌 ห้อง: {room}")
     me_label.config(text=f"👤 {state['name']}")
+    refit()
 
 
 # ========== popup เช็คชื่อ — สั่นเรียกความสนใจ + มีเสียง ==========
@@ -826,6 +857,7 @@ def reconnect_watchdog():
 init_sound()
 show_lobby()
 threading.Thread(target=connect_worker, daemon=True).start()
+root.after(60, refit)  # จัดขนาดหน้าต่างให้พอดีเนื้อหาหลัง widget วางตัวเสร็จ
 root.mainloop()
 
 try:
