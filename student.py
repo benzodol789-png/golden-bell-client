@@ -858,6 +858,10 @@ init_sound()
 show_lobby()
 threading.Thread(target=connect_worker, daemon=True).start()
 root.after(60, refit)  # จัดขนาดหน้าต่างให้พอดีเนื้อหาหลัง widget วางตัวเสร็จ
+# 🔄 อัพเดทอัตโนมัติ — เช็คเงียบๆ ตอนเปิด ถ้ามีเวอร์ชันใหม่ก็โหลดและเปิดใหม่ให้เอง
+updater.auto_update(root, "golden-bell-employee.exe", set_status)
+# เครื่องที่เปิดค้างทั้งวัน — คอยดูเป็นระยะ เจอแล้วบอกให้รู้ (ไม่รีสตาร์ทกลางคัน)
+updater.watch_for_updates(root, "golden-bell-employee.exe", set_status)
 root.mainloop()
 
 try:

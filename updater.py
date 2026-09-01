@@ -21,7 +21,7 @@ import time
 
 import requests
 
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 GITHUB_REPO = "benzodol789-png/golden-bell-client"
 API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "golden-bell-updater"}
@@ -287,3 +287,70 @@ def start_update_flow(root, asset_name, status_cb, ask_confirm, show_error, show
         root.after(0, swap)
 
     threading.Thread(target=work, daemon=True).start()
+
+
+def auto_update(root, asset_name, status_cb, delay_ms=2000):
+    """อัพเดทอัตโนมัติตอนเปิดโปรแกรม — ไม่มีป๊อปอัพ ไม่ต้องกดอะไรเลย
+
+    หลักคิด: การอัพเดทอัตโนมัติต้องไม่ขวางการทำงาน ถ้าติดขัดตรงไหน
+    (เน็ตไม่มี / GitHub ล่ม / เขียนไฟล์ไม่ได้ / ดาวน์โหลดพัง) ให้เงียบแล้วใช้
+    เวอร์ชันเดิมต่อไป ผู้ใช้ยังกดปุ่มอัพเดทเองได้ถ้าอยากรู้สาเหตุ
+    """
+    def work():
+        exe = current_exe()
+        if not exe:
+            return  # โหมด dev
+        try:
+            info = check_latest(timeout=10)
+            if info["version"] <= parse_version(APP_VERSION):
+                return
+            asset = info["assets"].get(asset_name)
+            if not asset:
+                return
+            _preflight(exe)
+        except Exception:
+            return  # เช็คไม่ได้ก็ไม่เป็นไร — ไม่รบกวนผู้ใช้
+
+        new_path = exe + f".new-{os.getpid()}"
+        try:
+            root.after(0, status_cb, f"⬇️ กำลังอัพเดทเป็น {info['tag']} อัตโนมัติ...")
+            download(asset, new_path,
+                     lambda d, t: root.after(0, status_cb,
+                                             f"⬇️ อัพเดทอัตโนมัติ {d * 100 // t}%"))
+        except Exception:
+            root.after(0, status_cb, "")
+            return
+
+        def swap():
+            try:
+                status_cb(f"🔄 อัพเดทเป็น {info['tag']} สำเร็จ — กำลังเปิดใหม่...")
+                root.update_idletasks()
+                apply_and_restart(new_path)  # สำเร็จ = โปรเซสนี้จบ
+            except Exception:
+                status_cb("")
+                try:
+                    os.remove(new_path)
+                except OSError:
+                    pass
+
+        root.after(0, swap)
+
+    # หน่วงไว้ก่อน ให้หน้าต่างขึ้นและต่อเซิร์ฟเวอร์ก่อน แล้วค่อยเช็คเบื้องหลัง
+    root.after(delay_ms, lambda: threading.Thread(target=work, daemon=True).start())
+
+
+def watch_for_updates(root, asset_name, status_cb, every_ms=4 * 3600 * 1000):
+    """เครื่องที่เปิดโปรแกรมค้างทั้งวัน — คอยดูว่ามีเวอร์ชันใหม่ไหมเป็นระยะ
+    เจอแล้วแค่บอกให้รู้ ไม่รีสตาร์ทกลางคัน (กันหลุดตอนกำลังเช็คชื่อ)"""
+    def check():
+        try:
+            info = check_latest(timeout=10)
+            if info["version"] > parse_version(APP_VERSION):
+                root.after(0, status_cb,
+                           f"✨ มีเวอร์ชันใหม่ {info['tag']} — ปิดแล้วเปิดโปรแกรมใหม่ "
+                           f"เพื่ออัพเดทอัตโนมัติ (หรือกดปุ่มอัพเดท)")
+        except Exception:
+            pass
+        root.after(every_ms, lambda: threading.Thread(target=check, daemon=True).start())
+
+    root.after(every_ms, lambda: threading.Thread(target=check, daemon=True).start())
