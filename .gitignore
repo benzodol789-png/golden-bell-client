@@ -3,3 +3,4 @@ build/
 dist/
 *.pyc
 ทดสอบอัพเดท-*/
+build-out/
