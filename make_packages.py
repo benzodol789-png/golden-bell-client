@@ -6,7 +6,12 @@ import sys
 import zipfile
 
 sys.stdout.reconfigure(encoding="utf-8")
-DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+# รับโฟลเดอร์ต้นทาง/ปลายทางจาก argv ได้ — เผื่อ dist ถูกล็อกเพราะโปรแกรมเปิดค้างอยู่
+#   py -3 make_packages.py [โฟลเดอร์ที่มี .exe] [โฟลเดอร์ที่จะวางชุด .zip]
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(_HERE, "dist")
+DIST = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else SRC
+os.makedirs(DIST, exist_ok=True)
 SERVER_URL = "https://goldenbell.jed89.com"
 
 # ไฟล์ตั้งค่า — โปรแกรมอ่านไฟล์นี้แล้วต่อลิงก์นี้ก่อนเสมอ (ต่อติดทันที ไม่ต้องเดา)
@@ -17,7 +22,7 @@ with open(server_txt, "w", encoding="utf-8") as f:
     f.write(f"{SERVER_URL}\n")
 
 # ========== 1. Admin .zip ==========
-admin_exe = os.path.join(DIST, "กระดิ่งทองมรณะ-แอดมิน.exe")
+admin_exe = os.path.join(SRC, "กระดิ่งทองมรณะ-แอดมิน.exe")
 
 readme_admin = os.path.join(DIST, "README-แอดมิน.txt")
 with open(readme_admin, "w", encoding="utf-8") as f:
@@ -45,7 +50,7 @@ with zipfile.ZipFile(zip_admin, "w", zipfile.ZIP_DEFLATED) as z:
 print(f"✅ Admin .zip: {zip_admin} ({os.path.getsize(zip_admin)//1024//1024} MB)")
 
 # ========== 2. Employee .zip ==========
-employee_exe = os.path.join(DIST, "กระดิ่งทองมรณะ-พนักงาน.exe")
+employee_exe = os.path.join(SRC, "กระดิ่งทองมรณะ-พนักงาน.exe")
 
 readme_emp = os.path.join(DIST, "วิธีใช้-พนักงาน.txt")
 with open(readme_emp, "w", encoding="utf-8") as f:
