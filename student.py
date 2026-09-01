@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox
 
 import socketio
 
+import prefs    # 💾 เก็บค่าตั้งค่าของผู้ใช้ (ระดับเสียง)
 import theme    # 🎨 ระบบธีม มืด/สว่าง
 import updater  # 🔄 ระบบอัพเดทโปรแกรมจาก GitHub Releases
 
@@ -192,13 +193,29 @@ def init_sound():
         pass
 
 
+# 🔊 ระดับเสียงแจ้งเตือน 0-100 (จำค่าไว้ให้ เปิดโปรแกรมใหม่ก็ยังเป็นค่าเดิม)
+_volume = max(0, min(100, prefs.get("volume", 80)))
+
+
+def apply_volume(vol):
+    # MCI ใช้สเกล 0-1000 และตั้งแยกทีละเสียง — ต้องตั้งใหม่ทุกครั้งที่เปิดเสียงเพิ่ม
+    global _volume
+    _volume = max(0, min(100, int(vol)))
+    try:
+        for alias in _alert_sounds:
+            ctypes.windll.winmm.mciSendStringW(
+                f"setaudio {alias} volume to {_volume * 10}", None, 0, None)
+    except:
+        pass
+
+
 def play_alert():
     try:
         if _sound_ready and _alert_sounds:
             import random
             alias = random.choice(_alert_sounds)  # ✅ สุ่มเลือกเสียงแจ้ง
             ctypes.windll.winmm.mciSendStringW(f"play {alias} from 0", None, 0, None)
-        else:
+        elif _volume > 0:
             ctypes.windll.user32.MessageBeep(0x30)  # เสียงระบบสำรอง — ต้องมีเสียงทุกครั้ง
     except:
         pass
@@ -390,6 +407,55 @@ theme_btn = tk.Button(_update_bar, text="", font=F_SMALL, bg=C["bg"], fg=C["mute
                       relief="flat", bd=0, cursor="hand2", command=lambda: toggle_theme())
 theme_btn.pack(side="left", padx=(14, 0))
 theme_btn.config(text=_theme_label())
+
+# ✅ แถบปรับระดับเสียงเรียกเช็คชื่อ — กด −/+ หรือลากแถบก็ได้ จำค่าไว้ให้เอง
+_vol_bar = tk.Frame(root, bg=C["bg"])
+_vol_bar.pack(side="bottom", pady=(0, 2))
+
+
+def _vol_icon(v):
+    return "🔇" if v == 0 else ("🔈" if v < 34 else ("🔉" if v < 67 else "🔊"))
+
+
+def _refresh_vol_ui():
+    vol_icon.config(text=_vol_icon(_volume))
+    vol_value.config(text=f"{_volume}%" if _volume else "ปิดเสียง")
+
+
+def change_volume(v, play_sample=True):
+    apply_volume(v)
+    prefs.set("volume", _volume)
+    vol_scale.set(_volume)
+    _refresh_vol_ui()
+    if play_sample and _volume > 0:
+        play_alert()  # ให้ได้ยินทันทีว่าดังแค่ไหน
+
+
+vol_icon = tk.Label(_vol_bar, text="", font=F_SMALL, bg=C["bg"], fg=C["gold_light"])
+vol_icon.pack(side="left", padx=(0, 2))
+tk.Label(_vol_bar, text="เสียงเรียก", font=F_SMALL, bg=C["bg"],
+         fg=C["muted"]).pack(side="left", padx=(0, 6))
+tk.Button(_vol_bar, text="−", font=F_BOLD, bg=C["bg"], fg=C["gold_light"],
+          activebackground=C["bg"], activeforeground=C["gold"], relief="flat", bd=0,
+          cursor="hand2", command=lambda: change_volume(_volume - 10)).pack(side="left", padx=2)
+vol_scale = tk.Scale(_vol_bar, from_=0, to=100, orient="horizontal", showvalue=False,
+                     length=120, sliderlength=16, width=8, resolution=5,
+                     bg=C["bg"], fg=C["text"], troughcolor=C["card_dark"],
+                     activebackground=C["gold"], highlightthickness=0, bd=0,
+                     command=lambda v: change_volume(int(float(v)), play_sample=False))
+vol_scale.pack(side="left")
+vol_scale.bind("<ButtonRelease-1>", lambda e: change_volume(_volume))  # ปล่อยเมาส์แล้วลองเสียง
+tk.Button(_vol_bar, text="+", font=F_BOLD, bg=C["bg"], fg=C["gold_light"],
+          activebackground=C["bg"], activeforeground=C["gold"], relief="flat", bd=0,
+          cursor="hand2", command=lambda: change_volume(_volume + 10)).pack(side="left", padx=2)
+vol_value = tk.Label(_vol_bar, text="", font=F_SMALL, bg=C["bg"], fg=C["muted"], width=8)
+vol_value.pack(side="left", padx=(4, 0))
+tk.Button(_vol_bar, text="▶ ทดสอบ", font=F_SMALL, bg=C["bg"], fg=C["gold_light"],
+          activebackground=C["bg"], activeforeground=C["gold"], relief="flat", bd=0,
+          cursor="hand2", command=lambda: play_alert()).pack(side="left", padx=(10, 0))
+
+vol_scale.set(_volume)
+_refresh_vol_ui()
 
 
 def _restyle_tables():
@@ -855,6 +921,7 @@ def reconnect_watchdog():
 
 
 init_sound()
+apply_volume(_volume)  # ใช้ระดับเสียงที่ผู้ใช้ตั้งไว้ครั้งก่อน
 show_lobby()
 threading.Thread(target=connect_worker, daemon=True).start()
 root.after(60, refit)  # จัดขนาดหน้าต่างให้พอดีเนื้อหาหลัง widget วางตัวเสร็จ
