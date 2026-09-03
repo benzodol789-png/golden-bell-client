@@ -170,6 +170,7 @@ def save_name(name):
 # ========== เสียงแจ้งเตือน (MCI ของ Windows) ==========
 _sound_ready = False
 _alert_sounds = []  # ✅ ฟีเจอร์ใหม่: เสียงแจ้งหลายตัว
+_checkin_sound = None  # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับเสียงเรียกของแอดมิน)
 
 
 def init_sound():
@@ -189,6 +190,34 @@ def init_sound():
                 except:
                     pass
         _sound_ready = len(_alert_sounds) > 0
+        # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" — คนละไฟล์กับเสียงเรียกของแอดมิน
+        global _checkin_sound
+        path = resource_path("alert_checkin.mp3")
+        if os.path.exists(path):
+            if ctypes.windll.winmm.mciSendStringW(
+                    f'open "{path}" type mpegvideo alias odol_checkin', None, 0, None) == 0:
+                _checkin_sound = "odol_checkin"
+    except:
+        pass
+
+
+def play_checkin_alert():
+    # เสียงเตือนถึงรอบเช็คชื่อ — ใช้ระดับเสียงเดียวกับที่ผู้ใช้ตั้งไว้
+    try:
+        if _checkin_sound and _volume > 0:
+            ctypes.windll.winmm.mciSendStringW(
+                f"setaudio {_checkin_sound} volume to {_volume * 10}", None, 0, None)
+            ctypes.windll.winmm.mciSendStringW(f"play {_checkin_sound} from 0", None, 0, None)
+        elif _volume > 0:
+            ctypes.windll.user32.MessageBeep(0x30)
+    except:
+        pass
+
+
+def stop_checkin_alert():
+    try:
+        if _checkin_sound:
+            ctypes.windll.winmm.mciSendStringW(f"stop {_checkin_sound}", None, 0, None)
     except:
         pass
 
@@ -495,6 +524,20 @@ _saved_name = load_saved_name()
 if _saved_name:
     name_entry.insert(0, _saved_name)  # ✅ เติมชื่อที่เคยใช้ให้อัตโนมัติ
 
+
+def _announce_identity(*_args):
+    # พิมพ์ชื่อแล้วบอกเซิร์ฟเวอร์เลย — ระบบจะรู้ว่าต้องเตือนเช็คชื่อคนนี้ไหม
+    try:
+        who = name_entry.get().strip()
+        if who and sio.connected:
+            sio.emit("set_identity", {"name": who})
+    except Exception:
+        pass
+
+
+name_entry.bind("<FocusOut>", _announce_identity)
+name_entry.bind("<Return>", _announce_identity)
+
 rooms_card = RoundedCard(lobby, 560, 280)
 rooms_card.pack(pady=6)
 tk.Label(rooms_card.inner, text="🏠 เลือกห้องที่จะเข้า", font=F_HEAD,
@@ -569,6 +612,122 @@ def show_room(room):
     room_name_label.config(text=f"📌 ห้อง: {room}")
     me_label.config(text=f"👤 {state['name']}")
     refit()
+
+
+# ========== 🔔 ป๊อปอัพเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับการเรียกของแอดมิน) ==========
+# กติกา: เด้งเฉพาะตอนระบบประกาศรอบแล้วแต่คนนี้ยังไม่เช็ค
+#   - อยู่ที่นั่ง  : เสียงเตือนซ้ำทุก 1 นาที และรูปเด้งกลับมาแม้กดรับทราบไปแล้ว
+#   - ไม่อยู่ (กินข้าว/ห้องน้ำ) : เสียงครั้งเดียว รูปค้างไว้จนกว่าจะกลับมากดเอง
+#   - เช็คชื่อแล้ว : ปิดให้เองทันที ไม่ต้องกดอะไร
+CHECKIN_REPEAT_MS = 60 * 1000
+
+checkin_state = {"win": None, "img": None, "alert": None, "timer": None}
+
+
+def _cancel_checkin_timer():
+    if checkin_state["timer"] is not None:
+        try:
+            root.after_cancel(checkin_state["timer"])
+        except Exception:
+            pass
+        checkin_state["timer"] = None
+
+
+def close_checkin_popup(clear_alert=False):
+    _cancel_checkin_timer() if clear_alert else None
+    stop_checkin_alert()
+    win = checkin_state["win"]
+    checkin_state["win"] = None
+    if clear_alert:
+        checkin_state["alert"] = None
+    if win is not None:
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+
+
+def _checkin_repeat():
+    # ยังไม่ไปเช็ค → เตือนซ้ำ (เฉพาะคนที่อยู่ที่นั่ง)
+    checkin_state["timer"] = None
+    alert = checkin_state["alert"]
+    if not alert or alert.get("away"):
+        return
+    show_checkin_popup(alert, repeat=True)
+
+
+def show_checkin_popup(alert, repeat=False):
+    checkin_state["alert"] = alert
+    rnd = alert.get("round") or 1
+    away = bool(alert.get("away"))
+
+    win = checkin_state["win"]
+    if win is not None and win.winfo_exists():
+        win.deiconify()
+        win.lift()
+    else:
+        win = tk.Toplevel(root)
+        checkin_state["win"] = win
+        win.title(f"🔔 ถึงเวลาเช็คชื่อรอบที่ {rnd}")
+        win.configure(bg=C["bg"])
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        win.protocol("WM_DELETE_WINDOW", lambda: close_checkin_popup())
+        try:
+            if _icon is not None:
+                win.iconphoto(False, _icon)
+        except Exception:
+            pass
+
+        img = None
+        try:
+            img = tk.PhotoImage(file=resource_path("alert_checkin.png"))
+            if img.width() > root.winfo_screenwidth() - 120:
+                img = img.subsample(2, 2)  # จอเล็กก็ยังเห็นทั้งรูป
+        except Exception:
+            img = None
+        checkin_state["img"] = img  # ต้องอ้างอิงค้างไว้ ไม่งั้นรูปหาย
+
+        if img is not None:
+            tk.Label(win, image=img, bg=C["bg"], bd=0).pack(padx=10, pady=(10, 4))
+        else:  # ไม่มีรูปก็ยังต้องเตือนได้
+            tk.Label(win, text="🔔 มีการเช็คชื่อนะ", font=("Segoe UI", 22, "bold"),
+                     bg=C["bg"], fg=C["gold"]).pack(padx=40, pady=(24, 8))
+
+        info = tk.Label(win, text="", font=F_BOLD, bg=C["bg"], fg=C["gold_light"])
+        info.pack(pady=(0, 4))
+        win.info_label = info
+        GoldButton(win, "✅ รับทราบ", w=240, kind="gold",
+                   command=lambda: close_checkin_popup(), bg=C["bg"]).pack(pady=(2, 14))
+
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry(f"+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 30)}")
+
+    note = "อย่าลืมไปเช็คชื่อในกลุ่มด้วยนะ"
+    if away:
+        note = f"ตอนนี้คุณ{alert.get('activity') or 'ไม่อยู่ที่นั่ง'} — กลับมาแล้วรีบไปเช็คชื่อนะ"
+    try:
+        win.info_label.config(text=f"📋 ถึงเวลาเช็คชื่อรอบที่ {rnd} — {note}")
+    except Exception:
+        pass
+
+    play_checkin_alert()
+    _cancel_checkin_timer()
+    if not away:  # อยู่ที่นั่ง = เตือนซ้ำทุก 1 นาทีจนกว่าจะไปเช็ค
+        checkin_state["timer"] = root.after(CHECKIN_REPEAT_MS, _checkin_repeat)
+
+
+@sio.on("checkin_alert")
+def on_checkin_alert(data):
+    root.after(0, show_checkin_popup, data if isinstance(data, dict) else {})
+
+
+@sio.on("checkin_alert_clear")
+def on_checkin_alert_clear(data=None):
+    # เช็คชื่อเรียบร้อยแล้ว (หรือหมดรอบ) — ปิดให้เอง
+    root.after(0, close_checkin_popup, True)
 
 
 # ========== popup เช็คชื่อ — สั่นเรียกความสนใจ + มีเสียง ==========
@@ -849,6 +1008,13 @@ def connect():
         state["connected"] = True
         conn_label.config(text="✅ เชื่อมต่อเซิร์ฟเวอร์แล้ว")
     root.after(0, _apply)
+    # 🔔 บอกชื่อให้เซิร์ฟเวอร์รู้ทันที — จะได้เตือนเช็คชื่อแม้ยังไม่ได้เข้าห้อง
+    try:
+        who = (state["name"] or name_entry.get() or "").strip()
+        if who:
+            sio.emit("set_identity", {"name": who})
+    except Exception:
+        pass
     # ✅ เน็ตสะดุดแล้วต่อกลับมา — เข้าห้องเดิมคืนอัตโนมัติ (เซิร์ฟเวอร์ล้างสถานะตอนหลุด)
     if state["room"] and state["name"]:
         try:

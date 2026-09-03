@@ -5,7 +5,7 @@ a = Analysis(
     ['student.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/alert_thai.mp3', '.'), ('assets/alert_thai2.mp3', '.'), ('assets/alert_thai3.mp3', '.'), ('assets/logo_small.png', '.')],
+    datas=[('assets/alert_checkin.mp3', '.'), ('assets/alert_checkin.png', '.'), ('assets/alert_thai.mp3', '.'), ('assets/alert_thai2.mp3', '.'), ('assets/alert_thai3.mp3', '.'), ('assets/logo_small.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

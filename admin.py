@@ -461,17 +461,23 @@ room_info_label.pack(side="left", padx=16, pady=(6, 0))
 
 member_card = RoundedCard(room_view, 860, 360)
 member_card.pack(pady=6)
-member_tree = ttk.Treeview(member_card.inner, columns=("name", "status", "time", "elapsed"),
+member_tree = ttk.Treeview(member_card.inner,
+                           columns=("name", "status", "time", "elapsed", "rounds", "activity"),
                            show="headings", height=7, style="Odol.Treeview")
 member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("time", text="🕐 เวลาเข้างาน")
 member_tree.heading("elapsed", text="⏱️ ใช้เวลา")
-member_tree.column("name", width=300)
-member_tree.column("status", width=210, anchor="center")
-member_tree.column("time", width=150, anchor="center")
-member_tree.column("elapsed", width=110, anchor="center")
+member_tree.heading("rounds", text="🔔 เช็คชื่อ")       # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
+member_tree.heading("activity", text="🏃 สถานะตอนนี้")
+member_tree.column("name", width=210)
+member_tree.column("status", width=150, anchor="center")
+member_tree.column("time", width=105, anchor="center")
+member_tree.column("elapsed", width=85, anchor="center")
+member_tree.column("rounds", width=140, anchor="center")
+member_tree.column("activity", width=180, anchor="w")
 member_tree.pack(fill="both", expand=True)
+member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 member_tree.tag_configure("muted", foreground=C["muted"])
 member_tree.tag_configure("amber", foreground=C["amber"])
 member_tree.tag_configure("green", foreground=C["green"])
@@ -492,6 +498,8 @@ def refit():
 
 
 def show_lobby():
+    status_info["people"] = {}  # ออกจากห้องแล้วล้างข้อมูลสถานะของห้องเก่า
+    state["members_cache"] = None
     room_view.pack_forget()
     lobby.pack(fill="both", expand=True)
     root.title(f"🔔 {APP_NAME} — แอดมิน")
@@ -730,17 +738,87 @@ def render_rooms(rooms):
             room_tree.selection_set(iid)
 
 
+# ========== 🔗 ข้อมูลจากระบบ check-status (เซิร์ฟเวอร์ส่งมาให้สดๆ) ==========
+ROUND_DOT = {"green": "🟢", "red": "🔴", "gray": "⚪",
+             "offshift": "⬜", "holiday": "🏖", "dayoff": "🏖"}
+ACTIVITY_ICON = {"กลับที่นั่ง": "✅ อยู่ที่นั่ง", "ปวดหนัก": "🚻 ปวดหนัก",
+                 "ปวดน้อย": "🚻 ปวดน้อย", "กินข้าว": "🍚 กินข้าว"}
+
+status_info = {"people": {}, "round": 1}  # ข้อมูลล่าสุดของห้องที่กำลังดูอยู่
+
+
+def _fmt_dur(seconds):
+    seconds = int(seconds or 0)
+    if seconds >= 3600:
+        return f"{seconds // 3600} ชม. {seconds % 3600 // 60} น."
+    return f"{seconds // 60} นาที" if seconds >= 60 else f"{seconds} วิ"
+
+
+def _rounds_text(info):
+    """3 จุดสีตามสถานะแต่ละรอบ + เวลาของรอบปัจจุบัน (ถ้าเช็คแล้ว)"""
+    rounds = info.get("rounds") or []
+    if not rounds:
+        return "—"
+    # ไม่ใช่กะนี้ / วันหยุด → แสดงเป็นข้อความไปเลย ไม่ต้องมีจุด (เหมือนหน้าเว็บของเขา)
+    if rounds[0] in ("offshift", "holiday", "dayoff"):
+        return {"offshift": "ไม่ใช่กะนี้", "holiday": "วันหยุด", "dayoff": "วันหยุด (ลา)"}[rounds[0]]
+    dots = "".join(ROUND_DOT.get(r, "⚪") for r in rounds)
+    cur = status_info["round"]
+    times = info.get("times") or []
+    at = times[cur - 1] if len(times) >= cur else ""
+    return f"{dots}  {at}" if at else dots
+
+
+def _activity_text(info):
+    act = info.get("activity") or ""
+    label = ACTIVITY_ICON.get(act, act or "—")
+    if act and act != "กลับที่นั่ง":
+        label += f" · {_fmt_dur(info.get('duration'))}"
+        if info.get("over"):
+            label += " ⚠️"
+    return label
+
+
+def _status_cells(name):
+    """คืน (ข้อความ 3 รอบ, ข้อความสถานะ, ต้องเน้นแดงไหม) ของพนักงานคนหนึ่ง"""
+    info = status_info["people"].get(name)
+    if not info:
+        return "—", "—", False
+    if info.get("match") == "ambiguous":
+        return "—", "❓ ชื่อซ้ำหลายคน", False
+    if info.get("match") != "ok":
+        return "—", "❓ ไม่พบในระบบ", False
+    return _rounds_text(info), _activity_text(info), bool(info.get("over"))
+
+
+@sio.on("members_status")
+def on_members_status(data):
+    def _apply():
+        if data.get("room") != state["room"]:
+            return
+        status_info["people"] = data.get("people") or {}
+        status_info["round"] = data.get("current_round") or 1
+        member_tree.heading("rounds", text=f"🔔 เช็คชื่อ (รอบ {status_info['round']})")
+        if state.get("members_cache"):
+            render_members(state["members_cache"])
+    root.after(0, _apply)
+
+
 def render_members(data):
     if data["room"] != state["room"]:
         return
     room_info_label.config(text=f"👥 พนักงาน {len(data['members'])} คน  •  🛡️ แอดมิน {data['admins']} คน")
+    state["members_cache"] = data  # เก็บไว้วาดใหม่ตอนข้อมูลสถานะอัปเดต
     selected = set(member_tree.selection())
     member_tree.delete(*member_tree.get_children())
     for m in data["members"]:
         label, tag = STATUS_TH.get(m["status"], (m["status"], "muted"))
         elapsed = f"{m['elapsed']} วิ" if m.get("elapsed") else "—"
+        rounds_txt, act_txt, over = _status_cells(m["name"])
         member_tree.insert("", "end", iid=m["sid"],
-                           values=(m["name"], label, m["time"] or "—", elapsed), tags=(tag,))
+                           values=(m["name"], label, m["time"] or "—", elapsed,
+                                   rounds_txt, act_txt),
+                           tags=("over",) if over else (tag,))
         if m["sid"] in selected:
             member_tree.selection_add(m["sid"])
 
