@@ -623,7 +623,8 @@ def show_room(room):
 CHECKIN_REPEAT_MS = 60 * 1000
 
 # acked = เลขรอบที่กดรับทราบไปแล้ว (รอบใหม่ค่อยเตือนอีกครั้ง)
-checkin_state = {"win": None, "img": None, "alert": None, "timer": None, "acked": None}
+checkin_state = {"win": None, "img": None, "alert": None, "timer": None,
+                 "acked": None, "cleared": None}
 
 
 def _cancel_checkin_timer():
@@ -669,13 +670,24 @@ def show_checkin_popup(alert, repeat=False):
     rnd = alert.get("round") or 1
     if checkin_state["acked"] == rnd:
         return  # กดรับทราบรอบนี้ไปแล้ว — ไม่กวนซ้ำ
+    # เพิ่งเช็คชื่อรอบนี้ไปหมาดๆ — ข้อมูลฝั่งระบบอาจแกว่งอยู่ครู่หนึ่ง อย่าเพิ่งเด้งซ้ำ
+    cleared = checkin_state.get("cleared") or {}
+    if cleared.get("round") == rnd and time.time() - cleared.get("at", 0) < 300:
+        return
+
+    win = checkin_state["win"]
+    win_open = win is not None and win.winfo_exists()
+    # เตือนรอบเดิมที่ยังค้างอยู่บนจอ (เช่น เขาเปลี่ยนจากกินข้าวเป็นกลับที่นั่ง)
+    # → แค่อัปเดตข้อความ ไม่ต้องเด้งใหม่และไม่ต้องเล่นเสียงซ้ำ
+    refresh_only = win_open and not repeat and (checkin_state["alert"] or {}).get("round") == rnd
+
     checkin_state["alert"] = alert
     away = bool(alert.get("away"))
 
-    win = checkin_state["win"]
-    if win is not None and win.winfo_exists():
-        win.deiconify()
-        win.lift()
+    if win_open:
+        if not refresh_only:
+            win.deiconify()
+            win.lift()
     else:
         win = tk.Toplevel(root)
         checkin_state["win"] = win
@@ -738,7 +750,8 @@ def show_checkin_popup(alert, repeat=False):
     except Exception:
         pass
 
-    play_checkin_alert()
+    if not refresh_only:
+        play_checkin_alert()
     _cancel_checkin_timer()
     if not away:  # อยู่ที่นั่ง = เตือนซ้ำทุก 1 นาทีจนกว่าจะไปเช็ค
         checkin_state["timer"] = root.after(CHECKIN_REPEAT_MS, _checkin_repeat)
@@ -757,7 +770,12 @@ def on_do_update(data=None):
 
 @sio.on("checkin_alert_clear")
 def on_checkin_alert_clear(data=None):
-    # เช็คชื่อเรียบร้อยแล้ว (หรือหมดรอบ) — ปิดให้เอง
+    # เช็คชื่อเรียบร้อยแล้ว (หรือหมดรอบ) — ปิดให้เอง และจำไว้กันเด้งซ้ำจากข้อมูลที่แกว่ง
+    rnd = (data or {}).get("round") if isinstance(data, dict) else None
+    if rnd is None:
+        rnd = (checkin_state.get("alert") or {}).get("round")
+    if rnd:
+        checkin_state["cleared"] = {"round": rnd, "at": time.time()}
     root.after(0, close_checkin_popup, True)
 
 
