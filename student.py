@@ -616,12 +616,14 @@ def show_room(room):
 
 # ========== 🔔 ป๊อปอัพเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับการเรียกของแอดมิน) ==========
 # กติกา: เด้งเฉพาะตอนระบบประกาศรอบแล้วแต่คนนี้ยังไม่เช็ค
-#   - อยู่ที่นั่ง  : เสียงเตือนซ้ำทุก 1 นาที และรูปเด้งกลับมาแม้กดรับทราบไปแล้ว
-#   - ไม่อยู่ (กินข้าว/ห้องน้ำ) : เสียงครั้งเดียว รูปค้างไว้จนกว่าจะกลับมากดเอง
+#   - กดรับทราบแล้ว : จบ ไม่เตือนซ้ำอีกในรอบนั้น
+#   - ยังไม่กดรับทราบ + อยู่ที่นั่ง : เสียงเตือนซ้ำทุก 1 นาที รูปยังค้างอยู่
+#   - ยังไม่กดรับทราบ + ไม่อยู่ (กินข้าว/ห้องน้ำ) : เสียงครั้งเดียว รูปค้างไว้ให้เห็นตอนกลับมา
 #   - เช็คชื่อแล้ว : ปิดให้เองทันที ไม่ต้องกดอะไร
 CHECKIN_REPEAT_MS = 60 * 1000
 
-checkin_state = {"win": None, "img": None, "alert": None, "timer": None}
+# acked = เลขรอบที่กดรับทราบไปแล้ว (รอบใหม่ค่อยเตือนอีกครั้ง)
+checkin_state = {"win": None, "img": None, "alert": None, "timer": None, "acked": None}
 
 
 def _cancel_checkin_timer():
@@ -633,13 +635,19 @@ def _cancel_checkin_timer():
         checkin_state["timer"] = None
 
 
-def close_checkin_popup(clear_alert=False):
-    _cancel_checkin_timer() if clear_alert else None
+def close_checkin_popup(clear_alert=False, acked=False):
+    """ปิดป๊อปอัพ — acked=True คือผู้ใช้กดรับทราบเอง (จะไม่เตือนซ้ำอีกในรอบนั้น)"""
+    if acked:
+        alert = checkin_state["alert"] or {}
+        checkin_state["acked"] = alert.get("round") or 1
+    if acked or clear_alert:
+        _cancel_checkin_timer()
     stop_checkin_alert()
     win = checkin_state["win"]
     checkin_state["win"] = None
     if clear_alert:
         checkin_state["alert"] = None
+        checkin_state["acked"] = None  # เช็คชื่อแล้ว รอบหน้าเตือนได้ตามปกติ
     if win is not None:
         try:
             if win.winfo_exists():
@@ -649,7 +657,7 @@ def close_checkin_popup(clear_alert=False):
 
 
 def _checkin_repeat():
-    # ยังไม่ไปเช็ค → เตือนซ้ำ (เฉพาะคนที่อยู่ที่นั่ง)
+    # ยังไม่กดรับทราบและยังไม่ไปเช็ค → เตือนซ้ำ (เฉพาะคนที่อยู่ที่นั่ง)
     checkin_state["timer"] = None
     alert = checkin_state["alert"]
     if not alert or alert.get("away"):
@@ -658,8 +666,10 @@ def _checkin_repeat():
 
 
 def show_checkin_popup(alert, repeat=False):
-    checkin_state["alert"] = alert
     rnd = alert.get("round") or 1
+    if checkin_state["acked"] == rnd:
+        return  # กดรับทราบรอบนี้ไปแล้ว — ไม่กวนซ้ำ
+    checkin_state["alert"] = alert
     away = bool(alert.get("away"))
 
     win = checkin_state["win"]
@@ -672,8 +682,9 @@ def show_checkin_popup(alert, repeat=False):
         win.title(f"🔔 ถึงเวลาเช็คชื่อรอบที่ {rnd}")
         win.configure(bg=C["bg"])
         win.resizable(False, False)
+        win.overrideredirect(True)  # ไม่เอาแถบหัวหน้าต่าง — ให้เหลือแต่ป้ายแจ้งเตือนล้วนๆ
         win.attributes("-topmost", True)
-        win.protocol("WM_DELETE_WINDOW", lambda: close_checkin_popup())
+        win.protocol("WM_DELETE_WINDOW", lambda: close_checkin_popup(acked=True))
         try:
             if _icon is not None:
                 win.iconphoto(False, _icon)
@@ -699,11 +710,25 @@ def show_checkin_popup(alert, repeat=False):
         info.pack(pady=(0, 4))
         win.info_label = info
         GoldButton(win, "✅ รับทราบ", w=240, kind="gold",
-                   command=lambda: close_checkin_popup(), bg=C["bg"]).pack(pady=(2, 14))
+                   command=lambda: close_checkin_popup(acked=True), bg=C["bg"]).pack(pady=(2, 14))
 
+        # จัดกลางจอ — ต้องให้ Tk คำนวณขนาดจริงก่อน ไม่งั้นได้ขนาดหลอกแล้ววางเบี้ยว
+        win.update_idletasks()
         w, h = win.winfo_reqwidth(), win.winfo_reqheight()
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        win.geometry(f"+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 30)}")
+        base_x, base_y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
+        win.geometry(f"{w}x{h}+{base_x}+{base_y}")
+
+        # สั่นเรียกความสนใจ — จังหวะเดียวกับป๊อปอัพเรียกเช็คชื่อของแอดมิน
+        def shake(n=0):
+            if checkin_state["win"] is not win or not win.winfo_exists():
+                return  # ปิดไปแล้วหรือถูกแทนที่ — หยุดสั่น
+            dx = int(9 * math.sin(n * 0.9)) if n % 90 < 30 else 0  # สั่นเป็นชุด เว้นจังหวะ
+            win.geometry(f"{w}x{h}+{base_x + dx}+{base_y}")
+            win.lift()
+            win.after(35, shake, n + 1)
+
+        shake()
 
     note = "อย่าลืมไปเช็คชื่อในกลุ่มด้วยนะ"
     if away:
