@@ -21,7 +21,7 @@ import time
 
 import requests
 
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 GITHUB_REPO = "benzodol789-png/golden-bell-client"
 API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "golden-bell-updater"}
@@ -339,16 +339,24 @@ def auto_update(root, asset_name, status_cb, delay_ms=2000):
     root.after(delay_ms, lambda: threading.Thread(target=work, daemon=True).start())
 
 
-def watch_for_updates(root, asset_name, status_cb, every_ms=4 * 3600 * 1000):
+def force_update(root, asset_name, status_cb):
+    """เซิร์ฟเวอร์สั่งให้อัพเดทเดี๋ยวนี้ — ทำเงียบๆ ไม่ถาม แล้วเปิดโปรแกรมใหม่ให้เอง"""
+    auto_update(root, asset_name, status_cb, delay_ms=200)
+
+
+def watch_for_updates(root, asset_name, status_cb, can_update=None, every_ms=30 * 60 * 1000):
     """เครื่องที่เปิดโปรแกรมค้างทั้งวัน — คอยดูว่ามีเวอร์ชันใหม่ไหมเป็นระยะ
-    เจอแล้วแค่บอกให้รู้ ไม่รีสตาร์ทกลางคัน (กันหลุดตอนกำลังเช็คชื่อ)"""
+    เจอแล้วอัพเดทให้เลยถ้าจังหวะปลอดภัย (can_update บอกว่าตอนนี้รีสตาร์ทได้ไหม)
+    ถ้ายังไม่ว่างก็แค่บอกให้รู้ แล้วรอบหน้าค่อยลองใหม่ — ไม่รีสตาร์ทกลางการเช็คชื่อ"""
     def check():
         try:
             info = check_latest(timeout=10)
             if info["version"] > parse_version(APP_VERSION):
-                root.after(0, status_cb,
-                           f"✨ มีเวอร์ชันใหม่ {info['tag']} — ปิดแล้วเปิดโปรแกรมใหม่ "
-                           f"เพื่ออัพเดทอัตโนมัติ (หรือกดปุ่มอัพเดท)")
+                if can_update is None or can_update():
+                    root.after(0, auto_update, root, asset_name, status_cb, 100)
+                else:
+                    root.after(0, status_cb,
+                               f"✨ มีเวอร์ชันใหม่ {info['tag']} — จะอัพเดทให้เมื่อว่าง")
         except Exception:
             pass
         root.after(every_ms, lambda: threading.Thread(target=check, daemon=True).start())

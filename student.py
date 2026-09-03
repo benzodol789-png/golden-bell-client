@@ -530,7 +530,7 @@ def _announce_identity(*_args):
     try:
         who = name_entry.get().strip()
         if who and sio.connected:
-            sio.emit("set_identity", {"name": who})
+            sio.emit("set_identity", {"name": who, "version": updater.APP_VERSION})
     except Exception:
         pass
 
@@ -747,6 +747,12 @@ def show_checkin_popup(alert, repeat=False):
 @sio.on("checkin_alert")
 def on_checkin_alert(data):
     root.after(0, show_checkin_popup, data if isinstance(data, dict) else {})
+
+
+@sio.on("do_update")
+def on_do_update(data=None):
+    # เซิร์ฟเวอร์สั่งให้อัพเดทเดี๋ยวนี้ — โหลดเวอร์ชันใหม่แล้วเปิดโปรแกรมใหม่ให้เอง
+    root.after(0, updater.force_update, root, "golden-bell-employee.exe", set_status)
 
 
 @sio.on("checkin_alert_clear")
@@ -1037,7 +1043,7 @@ def connect():
     try:
         who = (state["name"] or name_entry.get() or "").strip()
         if who:
-            sio.emit("set_identity", {"name": who})
+            sio.emit("set_identity", {"name": who, "version": updater.APP_VERSION})
     except Exception:
         pass
     # ✅ เน็ตสะดุดแล้วต่อกลับมา — เข้าห้องเดิมคืนอัตโนมัติ (เซิร์ฟเวอร์ล้างสถานะตอนหลุด)
@@ -1119,7 +1125,10 @@ root.after(60, refit)  # จัดขนาดหน้าต่างให้�
 # 🔄 อัพเดทอัตโนมัติ — เช็คเงียบๆ ตอนเปิด ถ้ามีเวอร์ชันใหม่ก็โหลดและเปิดใหม่ให้เอง
 updater.auto_update(root, "golden-bell-employee.exe", set_status)
 # เครื่องที่เปิดค้างทั้งวัน — คอยดูเป็นระยะ เจอแล้วบอกให้รู้ (ไม่รีสตาร์ทกลางคัน)
-updater.watch_for_updates(root, "golden-bell-employee.exe", set_status)
+# อัพเดทเองระหว่างเปิดค้างได้ ถ้าไม่มีป๊อปอัพค้างอยู่ (ไม่รีสตาร์ทกลางการเช็คชื่อ)
+updater.watch_for_updates(root, "golden-bell-employee.exe", set_status,
+                          can_update=lambda: state.get("popup") is None
+                          and checkin_state["win"] is None)
 root.mainloop()
 
 try:

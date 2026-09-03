@@ -854,6 +854,12 @@ def _status_cells(name):
     return img, txt, _activity_text(info), bool(info.get("over"))
 
 
+@sio.on("do_update")
+def on_do_update(data=None):
+    # เซิร์ฟเวอร์สั่งให้อัพเดทเดี๋ยวนี้
+    root.after(0, updater.force_update, root, "golden-bell-admin.exe", set_status)
+
+
 @sio.on("members_status")
 def on_members_status(data):
     def _apply():
@@ -1028,7 +1034,11 @@ root.after(60, refit)  # จัดขนาดหน้าต่างให้�
 # 🔄 อัพเดทอัตโนมัติ — เช็คเงียบๆ ตอนเปิด ถ้ามีเวอร์ชันใหม่ก็โหลดและเปิดใหม่ให้เอง
 updater.auto_update(root, "golden-bell-admin.exe", set_status)
 # เครื่องที่เปิดค้างทั้งวัน — คอยดูเป็นระยะ เจอแล้วบอกให้รู้ (ไม่รีสตาร์ทกลางคัน)
-updater.watch_for_updates(root, "golden-bell-admin.exe", set_status)
+# อัพเดทเองระหว่างเปิดค้างได้ ถ้าไม่มีใครค้างสถานะ "รอยืนยัน" อยู่
+updater.watch_for_updates(root, "golden-bell-admin.exe", set_status,
+                          can_update=lambda: not any(
+                              m.get("status") == "pending"
+                              for m in ((state.get("members_cache") or {}).get("members") or [])))
 root.mainloop()
 
 try:
