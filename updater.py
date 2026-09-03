@@ -21,7 +21,7 @@ import time
 
 import requests
 
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 GITHUB_REPO = "benzodol789-png/golden-bell-client"
 API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "golden-bell-updater"}

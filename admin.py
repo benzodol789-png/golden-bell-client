@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # 🔔 กระดิ่งทอง มรณะ — โปรแกรมแอดมิน
 import csv
+import math
 import ctypes
 import os
 import socket
@@ -297,16 +298,42 @@ addr_label.pack(anchor="w")
 admin_box = tk.Frame(header, bg=C["panel"])
 admin_box.pack(side="right", padx=18, pady=12)
 
-tk.Label(admin_box, text="🛡️ ชื่อแอดมิน", font=F_SMALL, bg=C["panel"],
-         fg=C["gold_light"]).pack(anchor="e", pady=(0, 2))
-admin_name_entry = tk.Entry(admin_box, font=F_NORMAL, bg=C["card_dark"],
+tk.Label(admin_box, text="🛡️ ชื่อแอดมิน", font=F_BOLD, bg=C["panel"],
+         fg=C["gold"]).pack(anchor="e", pady=(0, 3))
+# ✅ ใส่กรอบทองรอบช่อง — ของเดิมสีกลืนกับพื้นหลังจนไม่รู้ว่าเป็นช่องให้กรอก
+admin_entry_frame = tk.Frame(admin_box, bg=C["gold"], padx=2, pady=2)
+admin_entry_frame.pack(anchor="e")
+admin_name_entry = tk.Entry(admin_entry_frame, font=F_BOLD, bg=C["field"],
                             fg=C["text"], insertbackground=C["gold"],
-                            width=18, bd=0, relief="flat")
-admin_name_entry.pack(anchor="e", ipady=2, padx=4)
+                            width=20, bd=0, relief="flat", justify="center")
+admin_name_entry.pack(ipady=5, ipadx=4)
+
 # ✅ ไม่ใส่ค่าเริ่มต้น — บังคับให้แอดมินพิมพ์ชื่อตัวเองก่อนเรียกเช็คชื่อ ประวัติจะได้บอกว่าใครกด
+#    แต่ใส่ข้อความจางๆ บอกว่าต้องพิมพ์อะไร แล้วหายเองตอนคลิก
+ADMIN_HINT = "พิมพ์ชื่อของคุณ"
+
+
+def _hint_on():
+    if not admin_name_entry.get():
+        admin_name_entry.insert(0, ADMIN_HINT)
+        admin_name_entry.config(fg=C["muted"])
+
+
+def _hint_off(*_a):
+    if admin_name_entry.get() == ADMIN_HINT:
+        admin_name_entry.delete(0, "end")
+    admin_name_entry.config(fg=C["text"])
+
+
 def update_admin_name(*args):
-    state["admin_name"] = admin_name_entry.get().strip()
+    value = admin_name_entry.get().strip()
+    state["admin_name"] = "" if value == ADMIN_HINT else value
+
+
+admin_name_entry.bind("<FocusIn>", _hint_off)
+admin_name_entry.bind("<FocusOut>", lambda e: (update_admin_name(), _hint_on()))
 admin_name_entry.bind("<KeyRelease>", update_admin_name)
+_hint_on()
 update_admin_name()  # ตั้งค่าเบื้องต้น
 
 tk.Frame(root, bg=C["gold"], height=2).pack(fill="x")
@@ -459,23 +486,25 @@ room_name_label.pack(side="left")
 room_info_label = tk.Label(room_head, text="", font=F_NORMAL, bg=C["bg"], fg=C["muted"])
 room_info_label.pack(side="left", padx=16, pady=(6, 0))
 
-member_card = RoundedCard(room_view, 860, 360)
+member_card = RoundedCard(room_view, 980, 360)  # กว้างพอให้ทุกคอลัมน์แสดงครบไม่โดนตัด
 member_card.pack(pady=6)
 member_tree = ttk.Treeview(member_card.inner,
-                           columns=("name", "status", "time", "elapsed", "rounds", "activity"),
-                           show="headings", height=7, style="Odol.Treeview")
+                           columns=("name", "status", "time", "elapsed", "activity"),
+                           show="tree headings", height=7, style="Odol.Treeview")
+# คอลัมน์ #0 ใช้โชว์จุดสีของการเช็คชื่อ 3 รอบ — Treeview ใส่รูปได้เฉพาะคอลัมน์นี้
+member_tree.heading("#0", text="🔔 เช็คชื่อ")           # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
 member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("time", text="🕐 เวลาเข้างาน")
 member_tree.heading("elapsed", text="⏱️ ใช้เวลา")
-member_tree.heading("rounds", text="🔔 เช็คชื่อ")       # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
 member_tree.heading("activity", text="🏃 สถานะตอนนี้")
-member_tree.column("name", width=210)
-member_tree.column("status", width=150, anchor="center")
-member_tree.column("time", width=105, anchor="center")
-member_tree.column("elapsed", width=85, anchor="center")
-member_tree.column("rounds", width=140, anchor="center")
-member_tree.column("activity", width=180, anchor="w")
+# ความกว้างรวม 930 พอดีกับพื้นที่ในการ์ด (980 - ขอบ 44) — ไม่มีคอลัมน์ไหนโดนตัด
+member_tree.column("#0", width=150, minwidth=140, stretch=False, anchor="w")
+member_tree.column("name", width=215, stretch=False)
+member_tree.column("status", width=150, anchor="center", stretch=False)
+member_tree.column("time", width=115, anchor="center", stretch=False)
+member_tree.column("elapsed", width=95, anchor="center", stretch=False)
+member_tree.column("activity", width=205, anchor="w")  # คอลัมน์สุดท้ายยืดเก็บที่ว่าง
 member_tree.pack(fill="both", expand=True)
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 member_tree.tag_configure("muted", foreground=C["muted"])
@@ -739,10 +768,43 @@ def render_rooms(rooms):
 
 
 # ========== 🔗 ข้อมูลจากระบบ check-status (เซิร์ฟเวอร์ส่งมาให้สดๆ) ==========
-ROUND_DOT = {"green": "🟢", "red": "🔴", "gray": "⚪",
-             "offshift": "⬜", "holiday": "🏖", "dayoff": "🏖"}
+# สีของจุดเช็คชื่อแต่ละรอบ — ใช้ชุดสีเดียวกับหน้าเว็บของระบบสถานะ
+ROUND_COLOR = {"green": "#4ADE80",   # เช็คแล้ว
+               "red": "#F87171",     # ประกาศรอบแล้วแต่ยังไม่เช็ค
+               "gray": "#4A4463",    # ยังไม่ประกาศรอบนี้
+               "offshift": "#3A3550",
+               "holiday": "#FBBF24",
+               "dayoff": "#FBBF24"}
 ACTIVITY_ICON = {"กลับที่นั่ง": "✅ อยู่ที่นั่ง", "ปวดหนัก": "🚻 ปวดหนัก",
                  "ปวดน้อย": "🚻 ปวดน้อย", "กินข้าว": "🍚 กินข้าว"}
+_dot_images = {}  # เก็บรูปที่วาดแล้วไว้ใช้ซ้ำ (และกัน Tkinter ลบรูปทิ้งเพราะไม่มีใครอ้างอิง)
+
+
+def _dots_image(rounds):
+    """วาดจุดสี 3 วงเป็นรูปเล็กๆ — พื้นหลังโปร่งใส เลยใช้ได้ทั้งธีมมืดและสว่าง"""
+    key = tuple(rounds)
+    img = _dot_images.get(key)
+    if img is not None:
+        return img
+    d, gap, pad = 13, 7, 3                       # ขนาดจุด, ระยะห่าง, ขอบ
+    w = pad * 2 + d * 3 + gap * 2
+    h = d + pad * 2
+    img = tk.PhotoImage(width=w, height=h)       # รูปใหม่ = โปร่งใสทั้งหมด
+    r = d / 2.0
+    for i, st in enumerate(list(rounds)[:3]):
+        color = ROUND_COLOR.get(st, ROUND_COLOR["gray"])
+        cx = pad + i * (d + gap) + r
+        cy = pad + r
+        for y in range(h):                        # ไล่ทีละแถวให้ออกมาเป็นวงกลม
+            dy = y + 0.5 - cy
+            if abs(dy) > r:
+                continue
+            dx = math.sqrt(max(0.0, r * r - dy * dy))
+            x0, x1 = int(round(cx - dx)), int(round(cx + dx))
+            if x1 > x0:
+                img.put(color, to=(x0, y, x1, y + 1))
+    _dot_images[key] = img
+    return img
 
 status_info = {"people": {}, "round": 1}  # ข้อมูลล่าสุดของห้องที่กำลังดูอยู่
 
@@ -754,19 +816,19 @@ def _fmt_dur(seconds):
     return f"{seconds // 60} นาที" if seconds >= 60 else f"{seconds} วิ"
 
 
-def _rounds_text(info):
-    """3 จุดสีตามสถานะแต่ละรอบ + เวลาของรอบปัจจุบัน (ถ้าเช็คแล้ว)"""
+def _rounds_cell(info):
+    """คืน (รูปจุดสี, ข้อความต่อท้าย) ของช่องเช็คชื่อ — เวลาโชว์เฉพาะรอบปัจจุบัน"""
     rounds = info.get("rounds") or []
     if not rounds:
-        return "—"
-    # ไม่ใช่กะนี้ / วันหยุด → แสดงเป็นข้อความไปเลย ไม่ต้องมีจุด (เหมือนหน้าเว็บของเขา)
+        return None, "—"
+    # ไม่ใช่กะนี้ / วันหยุด → เป็นข้อความไปเลย ไม่ต้องมีจุด (เหมือนหน้าเว็บของเขา)
     if rounds[0] in ("offshift", "holiday", "dayoff"):
-        return {"offshift": "ไม่ใช่กะนี้", "holiday": "วันหยุด", "dayoff": "วันหยุด (ลา)"}[rounds[0]]
-    dots = "".join(ROUND_DOT.get(r, "⚪") for r in rounds)
+        return None, {"offshift": "ไม่ใช่กะนี้", "holiday": "วันหยุด",
+                      "dayoff": "วันหยุด (ลา)"}[rounds[0]]
     cur = status_info["round"]
     times = info.get("times") or []
     at = times[cur - 1] if len(times) >= cur else ""
-    return f"{dots}  {at}" if at else dots
+    return _dots_image(rounds), ("  " + at if at else "")
 
 
 def _activity_text(info):
@@ -780,15 +842,16 @@ def _activity_text(info):
 
 
 def _status_cells(name):
-    """คืน (ข้อความ 3 รอบ, ข้อความสถานะ, ต้องเน้นแดงไหม) ของพนักงานคนหนึ่ง"""
+    """คืน (รูปจุดสี, ข้อความช่องเช็คชื่อ, ข้อความสถานะ, เกินเวลาไหม) ของพนักงานคนหนึ่ง"""
     info = status_info["people"].get(name)
     if not info:
-        return "—", "—", False
+        return None, "—", "—", False
     if info.get("match") == "ambiguous":
-        return "—", "❓ ชื่อซ้ำหลายคน", False
+        return None, "—", "❓ ชื่อซ้ำหลายคน", False
     if info.get("match") != "ok":
-        return "—", "❓ ไม่พบในระบบ", False
-    return _rounds_text(info), _activity_text(info), bool(info.get("over"))
+        return None, "—", "❓ ไม่พบในระบบ", False
+    img, txt = _rounds_cell(info)
+    return img, txt, _activity_text(info), bool(info.get("over"))
 
 
 @sio.on("members_status")
@@ -798,7 +861,7 @@ def on_members_status(data):
             return
         status_info["people"] = data.get("people") or {}
         status_info["round"] = data.get("current_round") or 1
-        member_tree.heading("rounds", text=f"🔔 เช็คชื่อ (รอบ {status_info['round']})")
+        member_tree.heading("#0", text=f"🔔 เช็คชื่อ (รอบ {status_info['round']})")
         if state.get("members_cache"):
             render_members(state["members_cache"])
     root.after(0, _apply)
@@ -814,10 +877,10 @@ def render_members(data):
     for m in data["members"]:
         label, tag = STATUS_TH.get(m["status"], (m["status"], "muted"))
         elapsed = f"{m['elapsed']} วิ" if m.get("elapsed") else "—"
-        rounds_txt, act_txt, over = _status_cells(m["name"])
+        dots_img, rounds_txt, act_txt, over = _status_cells(m["name"])
         member_tree.insert("", "end", iid=m["sid"],
-                           values=(m["name"], label, m["time"] or "—", elapsed,
-                                   rounds_txt, act_txt),
+                           text=rounds_txt, image=dots_img or "",
+                           values=(m["name"], label, m["time"] or "—", elapsed, act_txt),
                            tags=("over",) if over else (tag,))
         if m["sid"] in selected:
             member_tree.selection_add(m["sid"])
