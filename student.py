@@ -171,7 +171,12 @@ def save_name(name):
 _sound_ready = False
 _alert_sounds = []  # ✅ ฟีเจอร์ใหม่: เสียงแจ้งหลายตัว
 _checkin_sound = None  # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับเสียงเรียกของแอดมิน)
-_break_voice = None  # ⏰ เสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง" — เล่นต่อท้ายเสียงเช็คชื่อ
+_break_voice = None  # ⏰ เสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง" — ใช้เมื่อไม่รู้จักกิจกรรม
+# ⏰ เสียงพูดแยกตามกิจกรรม — บอกไปเลยว่ากำลังจะหมดเวลาของอะไร ("ปวดน้อย ใกล้หมดเวลาแล้ว...")
+_break_voice_files = {"ปวดน้อย": "alert_break_light.mp3",
+                      "ปวดหนัก": "alert_break_heavy.mp3",
+                      "กินข้าว": "alert_break_food.mp3"}
+_break_voices = {}  # ชื่อกิจกรรม -> alias ของ MCI
 
 
 def init_sound():
@@ -204,6 +209,15 @@ def init_sound():
             if ctypes.windll.winmm.mciSendStringW(
                     f'open "{path}" type mpegvideo alias odol_break_voice', None, 0, None) == 0:
                 _break_voice = "odol_break_voice"
+        # เสียงที่บอกกิจกรรมด้วย — โหลดเท่าที่มีไฟล์ ขาดตัวไหนก็ถอยไปใช้เสียงกลาง
+        for i, (activity, filename) in enumerate(_break_voice_files.items()):
+            path = resource_path(filename)
+            if not os.path.exists(path):
+                continue
+            alias = f"odol_break_voice_{i}"
+            if ctypes.windll.winmm.mciSendStringW(
+                    f'open "{path}" type mpegvideo alias {alias}', None, 0, None) == 0:
+                _break_voices[activity] = alias
     except:
         pass
 
@@ -219,12 +233,14 @@ def _mci_length_ms(alias, default=4500):
     return default
 
 
-def play_break_voice():
+def play_break_voice(activity=""):
+    # เลือกเสียงที่บอกกิจกรรมนั้นก่อน ("ปวดน้อย ใกล้หมดเวลาแล้ว...") ไม่มีค่อยใช้เสียงกลาง
+    alias = _break_voices.get(activity) or _break_voice
     try:
-        if _break_voice and _volume > 0:
+        if alias and _volume > 0:
             ctypes.windll.winmm.mciSendStringW(
-                f"setaudio {_break_voice} volume to {_volume * 10}", None, 0, None)
-            ctypes.windll.winmm.mciSendStringW(f"play {_break_voice} from 0", None, 0, None)
+                f"setaudio {alias} volume to {_volume * 10}", None, 0, None)
+            ctypes.windll.winmm.mciSendStringW(f"play {alias} from 0", None, 0, None)
     except:
         pass
 
@@ -239,21 +255,22 @@ def cancel_break_voice():
         break_state["voice_after"] = None
 
 
-def play_break_alert():
-    """เสียงป้ายใกล้หมดเวลา = เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง"
+def play_break_alert(activity=""):
+    """เสียงป้ายใกล้หมดเวลา = เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูดที่บอกกิจกรรมด้วย
+    เช่น "ปวดหนัก ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง"
     (รอให้เสียงแรกจบก่อนค่อยพูด ไม่งั้นสองเสียงทับกันจนฟังไม่รู้เรื่อง)"""
     play_checkin_alert()
     delay = _mci_length_ms(_checkin_sound) + 200 if _checkin_sound else 1000
     cancel_break_voice()
-    break_state["voice_after"] = root.after(delay, play_break_voice)
+    break_state["voice_after"] = root.after(delay, lambda: play_break_voice(activity))
 
 
 def stop_break_alert():
     cancel_break_voice()
     stop_checkin_alert()
     try:
-        if _break_voice:
-            ctypes.windll.winmm.mciSendStringW(f"stop {_break_voice}", None, 0, None)
+        for alias in list(_break_voices.values()) + ([_break_voice] if _break_voice else []):
+            ctypes.windll.winmm.mciSendStringW(f"stop {alias}", None, 0, None)
     except:
         pass
 
@@ -900,7 +917,7 @@ def show_break_popup(alert):
     if win is not None and win.winfo_exists():
         _break_tick()          # ป้ายอยู่บนจอแล้ว — อัพเดทข้อความพอ ไม่ต้องสร้างใหม่
         if over:
-            play_break_alert()  # เพิ่งเปลี่ยนเป็น "เกินเวลา" — ส่งเสียงย้ำอีกครั้งหนึ่ง
+            play_break_alert(activity)  # เพิ่งเปลี่ยนเป็น "เกินเวลา" — ส่งเสียงย้ำอีกครั้งหนึ่ง
         return
 
     win = tk.Toplevel(root)
@@ -963,7 +980,7 @@ def show_break_popup(alert):
 
     shake()
     _break_tick()
-    play_break_alert()  # เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูดว่าใกล้หมดเวลา ให้รีบกดกลับ
+    play_break_alert(activity)  # เสียงเช็คชื่อ แล้วตามด้วยเสียงพูดว่ากิจกรรมนี้ใกล้หมดเวลา ให้รีบกดกลับ
 
 
 @sio.on("break_warning")
