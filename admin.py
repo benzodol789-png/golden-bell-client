@@ -4,6 +4,7 @@ import csv
 import math
 import ctypes
 import os
+import re
 import socket
 import sys
 import threading
@@ -14,6 +15,7 @@ from tkinter import ttk, messagebox, filedialog
 
 import socketio
 
+import prefs    # 💾 เก็บค่าที่ผู้ใช้เลือกไว้ (การเรียงห้อง ฯลฯ)
 import theme    # 🎨 ระบบธีม มืด/สว่าง
 import updater  # 🔄 ระบบอัพเดทโปรแกรมจาก GitHub Releases
 
@@ -424,13 +426,57 @@ tk.Label(lobby_card.inner, text="🏠 ห้องทั้งหมดในร
 
 room_tree = ttk.Treeview(lobby_card.inner, columns=("name", "members", "admins"),
                          show="headings", height=6, style="Odol.Treeview")
-room_tree.heading("name", text="🏷️ ชื่อห้อง")
-room_tree.heading("members", text="👥 พนักงาน")
-room_tree.heading("admins", text="🛡️ แอดมิน")
 room_tree.column("name", width=430)
 room_tree.column("members", width=170, anchor="center")
 room_tree.column("admins", width=170, anchor="center")
 room_tree.pack(fill="both", expand=True)
+
+# ========== เรียงห้อง — คลิกที่หัวคอลัมน์เพื่อเรียง กดซ้ำเพื่อสลับขึ้น/ลง ==========
+# จำค่าที่เลือกไว้ เปิดโปรแกรมครั้งหน้าก็เรียงแบบเดิม
+ROOM_HEADS = {"name": "🏷️ ชื่อห้อง", "members": "👥 พนักงาน", "admins": "🛡️ แอดมิน"}
+room_sort = {"col": prefs.get("room_sort_col", "name"),
+             "desc": prefs.get("room_sort_desc", False)}
+if room_sort["col"] not in ROOM_HEADS:
+    room_sort["col"] = "name"
+
+
+def _natural_key(text):
+    """เรียงชื่อที่มีเลขให้ถูกใจคน — "กะเช้า 2" ต้องมาก่อน "กะเช้า 10" ไม่ใช่เรียงตามตัวอักษรดิบ"""
+    return [int(p) if p.isdigit() else p.lower()
+            for p in re.split(r"(\d+)", str(text or ""))]
+
+
+def _refresh_room_heads():
+    for col, label in ROOM_HEADS.items():
+        arrow = ""
+        if col == room_sort["col"]:
+            arrow = "  ▼" if room_sort["desc"] else "  ▲"
+        room_tree.heading(col, text=label + arrow,
+                          command=(lambda c=col: sort_rooms_by(c)))
+
+
+def sort_rooms_by(col):
+    if room_sort["col"] == col:
+        room_sort["desc"] = not room_sort["desc"]  # คอลัมน์เดิม = สลับทิศ
+    else:
+        room_sort["col"], room_sort["desc"] = col, False
+    prefs.set("room_sort_col", room_sort["col"])
+    prefs.set("room_sort_desc", room_sort["desc"])
+    _refresh_room_heads()
+    render_rooms(state.get("rooms") or [])
+
+
+def sorted_rooms(rooms):
+    col = room_sort["col"]
+    if col == "name":
+        key = lambda r: _natural_key(r.get("name"))
+    else:
+        # เรียงตามจำนวนคน — จำนวนเท่ากันให้เรียงชื่อต่อ ลำดับจะได้ไม่สลับไปมาทุกครั้งที่รีเฟรช
+        key = lambda r: (int(r.get(col) or 0), _natural_key(r.get("name")))
+    return sorted(rooms, key=key, reverse=room_sort["desc"])
+
+
+_refresh_room_heads()
 
 lobby_btns = tk.Frame(lobby, bg=C["bg"])
 lobby_btns.pack(pady=8)
@@ -912,7 +958,7 @@ def render_rooms(rooms):
     selected = room_tree.selection()
     keep = room_tree.item(selected[0], "values")[0] if selected else None
     room_tree.delete(*room_tree.get_children())
-    for r in rooms:
+    for r in sorted_rooms(rooms):
         iid = room_tree.insert("", "end", values=(r["name"], r["members"], r["admins"]))
         if r["name"] == keep:
             room_tree.selection_set(iid)
