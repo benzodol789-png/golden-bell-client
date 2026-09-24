@@ -616,25 +616,14 @@ def show_room(room):
 
 # ========== 🔔 ป๊อปอัพเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับการเรียกของแอดมิน) ==========
 # กติกา: เด้งเฉพาะตอนระบบประกาศรอบแล้วแต่คนนี้ยังไม่เช็ค
-#   - รูปค้างบนจอเสมอ ไม่หายเอง — ต้องกดปิดเท่านั้น (ถึงจะเช็คชื่อไปแล้วก็ยังค้างอยู่)
+#   - ยังไม่เช็ค : เสียงดัง 1 ครั้ง แล้วรูปค้างบนจอ ไม่หายเอง จนกว่าจะกดปิด
+#   - เช็คชื่อสำเร็จ : ไม่ต้องทำอะไร (กว่าจะไปกดเช็คได้ เขาปิดป้ายไปก่อนแล้ว)
 #   - กดปิดแล้ว : จบ ไม่เตือนซ้ำอีกในรอบนั้น ไม่ว่าจะเช็คแล้วหรือยัง
-#   - ยังไม่กดปิด + อยู่ที่นั่ง : เสียงย้ำทุก 1 นาที
-#   - ยังไม่กดปิด + ไม่อยู่ (กินข้าว/ห้องน้ำ) : เสียงครั้งเดียว
-#   - พอเช็คชื่อสำเร็จ : หยุดเสียงย้ำ เปลี่ยนข้อความเป็น "เช็คแล้ว" แต่รูปยังค้างรอให้กดปิด
-CHECKIN_REPEAT_MS = 60 * 1000
+#   - ขึ้นรอบใหม่ : เริ่มเตือนใหม่ตามปกติ
 
-# acked = เลขรอบที่กดรับทราบไปแล้ว (รอบใหม่ค่อยเตือนอีกครั้ง)
-checkin_state = {"win": None, "img": None, "alert": None, "timer": None,
+# acked = เลขรอบที่กดปิดไปแล้ว (รอบใหม่ค่อยเตือนอีกครั้ง)
+checkin_state = {"win": None, "img": None, "alert": None,
                  "acked": None, "cleared": None}
-
-
-def _cancel_checkin_timer():
-    if checkin_state["timer"] is not None:
-        try:
-            root.after_cancel(checkin_state["timer"])
-        except Exception:
-            pass
-        checkin_state["timer"] = None
 
 
 def close_checkin_popup(clear_alert=False, acked=False):
@@ -642,8 +631,6 @@ def close_checkin_popup(clear_alert=False, acked=False):
     if acked:
         alert = checkin_state["alert"] or {}
         checkin_state["acked"] = alert.get("round") or 1
-    if acked or clear_alert:
-        _cancel_checkin_timer()
     stop_checkin_alert()
     win = checkin_state["win"]
     checkin_state["win"] = None
@@ -658,90 +645,78 @@ def close_checkin_popup(clear_alert=False, acked=False):
             pass
 
 
-def _checkin_repeat():
-    # ยังไม่กดรับทราบและยังไม่ไปเช็ค → เตือนซ้ำ (เฉพาะคนที่อยู่ที่นั่ง)
-    checkin_state["timer"] = None
-    alert = checkin_state["alert"]
-    if not alert or alert.get("away"):
-        return
-    show_checkin_popup(alert, repeat=True)
-
-
-def show_checkin_popup(alert, repeat=False):
+def show_checkin_popup(alert):
     rnd = alert.get("round") or 1
     if checkin_state["acked"] == rnd:
-        return  # กดรับทราบรอบนี้ไปแล้ว — ไม่กวนซ้ำ
+        return  # กดปิดรอบนี้ไปแล้ว — ไม่กวนซ้ำ
     # เพิ่งเช็คชื่อรอบนี้ไปหมาดๆ — ข้อมูลฝั่งระบบอาจแกว่งอยู่ครู่หนึ่ง อย่าเพิ่งเด้งซ้ำ
     cleared = checkin_state.get("cleared") or {}
     if cleared.get("round") == rnd and time.time() - cleared.get("at", 0) < 300:
         return
 
     win = checkin_state["win"]
-    win_open = win is not None and win.winfo_exists()
-    # เตือนรอบเดิมที่ยังค้างอยู่บนจอ (เช่น เขาเปลี่ยนจากกินข้าวเป็นกลับที่นั่ง)
-    # → แค่อัปเดตข้อความ ไม่ต้องเด้งใหม่และไม่ต้องเล่นเสียงซ้ำ
-    refresh_only = win_open and not repeat and (checkin_state["alert"] or {}).get("round") == rnd
+    if win is not None and win.winfo_exists():
+        # ป้ายของรอบนี้อยู่บนจออยู่แล้ว — ปล่อยไว้เฉยๆ ไม่ต้องทำอะไรทั้งนั้น
+        # (เขากดอิโมจิหรือเปลี่ยนสถานะระหว่างนั้น ก็ไม่ต้องไปยุ่งกับป้าย)
+        if (checkin_state["alert"] or {}).get("round") == rnd:
+            return
+        close_checkin_popup()  # เป็นรอบใหม่ — เก็บป้ายเก่าทิ้งก่อนขึ้นป้ายใหม่
 
     checkin_state["alert"] = alert
     away = bool(alert.get("away"))
 
-    if win_open:
-        if not refresh_only:
-            win.deiconify()
-            win.lift()
-    else:
-        win = tk.Toplevel(root)
-        checkin_state["win"] = win
-        win.title(f"🔔 ถึงเวลาเช็คชื่อรอบที่ {rnd}")
-        win.configure(bg=C["bg"])
-        win.resizable(False, False)
-        win.overrideredirect(True)  # ไม่เอาแถบหัวหน้าต่าง — ให้เหลือแต่ป้ายแจ้งเตือนล้วนๆ
-        win.attributes("-topmost", True)
-        win.protocol("WM_DELETE_WINDOW", lambda: close_checkin_popup(acked=True))
-        try:
-            if _icon is not None:
-                win.iconphoto(False, _icon)
-        except Exception:
-            pass
+    win = tk.Toplevel(root)
+    checkin_state["win"] = win
+    win.title(f"🔔 ถึงเวลาเช็คชื่อรอบที่ {rnd}")
+    win.configure(bg=C["bg"])
+    win.resizable(False, False)
+    win.overrideredirect(True)  # ไม่เอาแถบหัวหน้าต่าง — ให้เหลือแต่ป้ายแจ้งเตือนล้วนๆ
+    win.attributes("-topmost", True)
+    win.protocol("WM_DELETE_WINDOW", lambda: close_checkin_popup(acked=True))
+    try:
+        if _icon is not None:
+            win.iconphoto(False, _icon)
+    except Exception:
+        pass
 
+    img = None
+    try:
+        img = tk.PhotoImage(file=resource_path("alert_checkin.png"))
+        if img.width() > root.winfo_screenwidth() - 120:
+            img = img.subsample(2, 2)  # จอเล็กก็ยังเห็นทั้งรูป
+    except Exception:
         img = None
-        try:
-            img = tk.PhotoImage(file=resource_path("alert_checkin.png"))
-            if img.width() > root.winfo_screenwidth() - 120:
-                img = img.subsample(2, 2)  # จอเล็กก็ยังเห็นทั้งรูป
-        except Exception:
-            img = None
-        checkin_state["img"] = img  # ต้องอ้างอิงค้างไว้ ไม่งั้นรูปหาย
+    checkin_state["img"] = img  # ต้องอ้างอิงค้างไว้ ไม่งั้นรูปหาย
 
-        if img is not None:
-            tk.Label(win, image=img, bg=C["bg"], bd=0).pack(padx=10, pady=(10, 4))
-        else:  # ไม่มีรูปก็ยังต้องเตือนได้
-            tk.Label(win, text="🔔 มีการเช็คชื่อนะ", font=("Segoe UI", 22, "bold"),
-                     bg=C["bg"], fg=C["gold"]).pack(padx=40, pady=(24, 8))
+    if img is not None:
+        tk.Label(win, image=img, bg=C["bg"], bd=0).pack(padx=10, pady=(10, 4))
+    else:  # ไม่มีรูปก็ยังต้องเตือนได้
+        tk.Label(win, text="🔔 มีการเช็คชื่อนะ", font=("Segoe UI", 22, "bold"),
+                 bg=C["bg"], fg=C["gold"]).pack(padx=40, pady=(24, 8))
 
-        info = tk.Label(win, text="", font=F_BOLD, bg=C["bg"], fg=C["gold_light"])
-        info.pack(pady=(0, 4))
-        win.info_label = info
-        GoldButton(win, "✅ รับทราบ", w=240, kind="gold",
-                   command=lambda: close_checkin_popup(acked=True), bg=C["bg"]).pack(pady=(2, 14))
+    info = tk.Label(win, text="", font=F_BOLD, bg=C["bg"], fg=C["gold_light"])
+    info.pack(pady=(0, 4))
+    win.info_label = info
+    GoldButton(win, "✅ รับทราบ", w=240, kind="gold",
+               command=lambda: close_checkin_popup(acked=True), bg=C["bg"]).pack(pady=(2, 14))
 
-        # จัดกลางจอ — ต้องให้ Tk คำนวณขนาดจริงก่อน ไม่งั้นได้ขนาดหลอกแล้ววางเบี้ยว
-        win.update_idletasks()
-        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        base_x, base_y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
-        win.geometry(f"{w}x{h}+{base_x}+{base_y}")
+    # จัดกลางจอ — ต้องให้ Tk คำนวณขนาดจริงก่อน ไม่งั้นได้ขนาดหลอกแล้ววางเบี้ยว
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    base_x, base_y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
+    win.geometry(f"{w}x{h}+{base_x}+{base_y}")
 
-        # สั่นเรียกความสนใจ — จังหวะเดียวกับป๊อปอัพเรียกเช็คชื่อของแอดมิน
-        def shake(n=0):
-            if checkin_state["win"] is not win or not win.winfo_exists():
-                return  # ปิดไปแล้วหรือถูกแทนที่ — หยุดสั่น
-            dx = int(9 * math.sin(n * 0.9)) if n % 90 < 30 else 0  # สั่นเป็นชุด เว้นจังหวะ
-            win.geometry(f"{w}x{h}+{base_x + dx}+{base_y}")
-            win.lift()
-            win.after(35, shake, n + 1)
+    # สั่นเรียกความสนใจ — จังหวะเดียวกับป๊อปอัพเรียกเช็คชื่อของแอดมิน
+    def shake(n=0):
+        if checkin_state["win"] is not win or not win.winfo_exists():
+            return  # ปิดไปแล้วหรือถูกแทนที่ — หยุดสั่น
+        dx = int(9 * math.sin(n * 0.9)) if n % 90 < 30 else 0  # สั่นเป็นชุด เว้นจังหวะ
+        win.geometry(f"{w}x{h}+{base_x + dx}+{base_y}")
+        win.lift()
+        win.after(35, shake, n + 1)
 
-        shake()
+    shake()
 
     note = "อย่าลืมไปเช็คชื่อในกลุ่มด้วยนะ"
     if away:
@@ -751,11 +726,7 @@ def show_checkin_popup(alert, repeat=False):
     except Exception:
         pass
 
-    if not refresh_only:
-        play_checkin_alert()
-    _cancel_checkin_timer()
-    if not away:  # อยู่ที่นั่ง = เตือนซ้ำทุก 1 นาทีจนกว่าจะไปเช็ค
-        checkin_state["timer"] = root.after(CHECKIN_REPEAT_MS, _checkin_repeat)
+    play_checkin_alert()  # เสียงครั้งเดียวตอนป้ายขึ้น จากนั้นปล่อยรูปค้างไว้เฉยๆ
 
 
 @sio.on("checkin_alert")
