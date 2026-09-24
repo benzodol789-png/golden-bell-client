@@ -917,6 +917,14 @@ def show_break_popup(alert):
     except Exception:
         pass
 
+    # ปุ่มปิดมุมขวาบน — กดปิดได้เลยเหมือนกดรับทราบ (ป้ายไม่มีแถบหัวหน้าต่างจึงไม่มีปุ่ม X ของ Windows)
+    top_bar = tk.Frame(win, bg=C["bg"])
+    top_bar.pack(fill="x")
+    tk.Button(top_bar, text="✕", font=("Segoe UI", 12, "bold"), bg=C["bg"], fg=C["muted"],
+              activebackground=C["bg"], activeforeground=C["red"], relief="flat", bd=0,
+              cursor="hand2", command=lambda: close_break_popup(acked=True)
+              ).pack(side="right", padx=(0, 10), pady=(6, 0))
+
     img = None
     try:
         img = tk.PhotoImage(file=resource_path("alert_break.png"))
