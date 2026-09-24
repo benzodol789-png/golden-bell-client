@@ -171,6 +171,7 @@ def save_name(name):
 _sound_ready = False
 _alert_sounds = []  # ✅ ฟีเจอร์ใหม่: เสียงแจ้งหลายตัว
 _checkin_sound = None  # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับเสียงเรียกของแอดมิน)
+_break_voice = None  # ⏰ เสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง" — เล่นต่อท้ายเสียงเช็คชื่อ
 
 
 def init_sound():
@@ -191,12 +192,68 @@ def init_sound():
                     pass
         _sound_ready = len(_alert_sounds) > 0
         # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" — คนละไฟล์กับเสียงเรียกของแอดมิน
-        global _checkin_sound
+        global _checkin_sound, _break_voice
         path = resource_path("alert_checkin.mp3")
         if os.path.exists(path):
             if ctypes.windll.winmm.mciSendStringW(
                     f'open "{path}" type mpegvideo alias odol_checkin', None, 0, None) == 0:
                 _checkin_sound = "odol_checkin"
+        # ⏰ เสียงพูดสำหรับป้ายใกล้หมดเวลา — เล่นต่อจากเสียงเช็คชื่อ (เสียงเดียวกัน) ให้รู้ว่าต้องรีบกลับ
+        path = resource_path("alert_break_voice.mp3")
+        if os.path.exists(path):
+            if ctypes.windll.winmm.mciSendStringW(
+                    f'open "{path}" type mpegvideo alias odol_break_voice', None, 0, None) == 0:
+                _break_voice = "odol_break_voice"
+    except:
+        pass
+
+
+def _mci_length_ms(alias, default=4500):
+    """ถามความยาวไฟล์เสียงจาก MCI — ใช้กะจังหวะให้เสียงถัดไปเล่นต่อพอดี ไม่ทับกัน"""
+    try:
+        buf = ctypes.create_unicode_buffer(64)
+        if ctypes.windll.winmm.mciSendStringW(f"status {alias} length", buf, 64, None) == 0:
+            return int(buf.value)
+    except Exception:
+        pass
+    return default
+
+
+def play_break_voice():
+    try:
+        if _break_voice and _volume > 0:
+            ctypes.windll.winmm.mciSendStringW(
+                f"setaudio {_break_voice} volume to {_volume * 10}", None, 0, None)
+            ctypes.windll.winmm.mciSendStringW(f"play {_break_voice} from 0", None, 0, None)
+    except:
+        pass
+
+
+def cancel_break_voice():
+    aid = break_state.get("voice_after")
+    if aid:
+        try:
+            root.after_cancel(aid)
+        except Exception:
+            pass
+        break_state["voice_after"] = None
+
+
+def play_break_alert():
+    """เสียงป้ายใกล้หมดเวลา = เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง"
+    (รอให้เสียงแรกจบก่อนค่อยพูด ไม่งั้นสองเสียงทับกันจนฟังไม่รู้เรื่อง)"""
+    play_checkin_alert()
+    delay = _mci_length_ms(_checkin_sound) + 200 if _checkin_sound else 1000
+    cancel_break_voice()
+    break_state["voice_after"] = root.after(delay, play_break_voice)
+
+
+def stop_break_alert():
+    cancel_break_voice()
+    stop_checkin_alert()
+    try:
+        if _break_voice:
+            ctypes.windll.winmm.mciSendStringW(f"stop {_break_voice}", None, 0, None)
     except:
         pass
 
@@ -556,6 +613,8 @@ GoldButton(join_btns, "✅ เข้าห้องที่เลือก", w=
            command=lambda: join_selected(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(join_btns, "🔄 รีเฟรช", w=130, kind="blue",
            command=lambda: refresh_now(), bg=C["bg"]).pack(side="left", padx=6)
+GoldButton(join_btns, "📊 สถิติของฉัน", w=180, kind="dark",
+           command=lambda: request_my_stats(), bg=C["bg"]).pack(side="left", padx=6)
 
 net_row = tk.Frame(lobby, bg=C["bg"])
 net_row.pack()
@@ -580,17 +639,26 @@ member_card = RoundedCard(room_view, 560, 300)
 member_card.pack(pady=8)
 tk.Label(member_card.inner, text="👥 พนักงานในห้องนี้", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 6))
-member_tree = ttk.Treeview(member_card.inner, columns=("name", "status"),
+member_tree = ttk.Treeview(member_card.inner, columns=("name", "status", "activity", "today"),
                            show="headings", height=5, style="Odol.Treeview")
 member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
-member_tree.column("name", width=300)
-member_tree.column("status", width=190, anchor="center")
+member_tree.heading("activity", text="🏃 ตอนนี้")
+member_tree.heading("today", text="📊 ออกไปวันนี้")  # รวมเวลาออกไปข้างนอกทั้งวัน (ตัดรอบ 02:00)
+member_tree.column("name", width=160)
+member_tree.column("status", width=130, anchor="center")
+member_tree.column("activity", width=130, anchor="center")
+member_tree.column("today", width=100, anchor="center")
 member_tree.pack(fill="both", expand=True)
 member_tree.tag_configure("me", foreground=C["gold_light"])
+member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 
-GoldButton(room_view, "🚪 ออกจากห้อง / ย้ายห้อง", w=250, kind="dark",
-           command=lambda: leave_room(), bg=C["bg"]).pack(pady=10)
+room_btns = tk.Frame(room_view, bg=C["bg"])
+room_btns.pack(pady=10)
+GoldButton(room_btns, "🚪 ออกจากห้อง / ย้ายห้อง", w=250, kind="dark",
+           command=lambda: leave_room(), bg=C["bg"]).pack(side="left", padx=6)
+GoldButton(room_btns, "📊 สถิติของฉัน", w=180, kind="gold",
+           command=lambda: request_my_stats(), bg=C["bg"]).pack(side="left", padx=6)
 tk.Label(room_view, text="🔔 เมื่อแอดมินเรียกเช็คชื่อ จะมีเสียงและหน้าต่างเด้งขึ้นมา",
          font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack()
 
@@ -742,27 +810,294 @@ def on_do_update(data=None):
 
 @sio.on("checkin_alert_clear")
 def on_checkin_alert_clear(data=None):
-    """เช็คชื่อเรียบร้อยแล้ว (หรือหมดรอบ) — หยุดกวนทันที แต่ไม่ปิดรูปให้เอง
-    ตามที่ตกลงไว้: รูปต้องค้างจนกว่าผู้ใช้จะกดปิดเอง"""
+    """เช็คชื่อเรียบร้อยแล้ว — ไม่ต้องทำอะไรกับหน้าจอ
+    เพราะกว่าจะไปกดเช็คชื่อได้ เขาต้องปิดป้ายไปก่อนอยู่แล้ว
+    แค่จำรอบไว้เฉยๆ กันข้อมูลที่แกว่งกลับมาทำให้เด้งซ้ำ"""
     rnd = (data or {}).get("round") if isinstance(data, dict) else None
     if rnd is None:
         rnd = (checkin_state.get("alert") or {}).get("round")
+    if rnd:
+        checkin_state["cleared"] = {"round": rnd, "at": time.time()}
 
+
+# ========== ⏰ ป้ายเตือน "ใกล้หมดเวลาออกไปข้างนอก" ==========
+# เซิร์ฟเวอร์เฝ้าเวลาให้จากระบบ check-status แล้วส่ง break_warning มาเมื่อเหลือไม่ถึง 1 นาที
+# (ส่งซ้ำอีกครั้งตอนเกินเวลาจริง) — ป้ายขึ้นที่เครื่องของคนนั้นคนเดียว ไม่มีข้อความเข้ากลุ่ม Telegram
+# ป้ายค้างบนจอจนกดรับทราบ หรือจนกดกลับที่นั่งในกลุ่ม (เซิร์ฟเวอร์ส่ง break_warning_clear มาเอง)
+break_state = {"win": None, "img": None, "tick": None, "deadline": 0.0,
+               "activity": "", "key": None, "acked": None, "voice_after": None}
+
+
+def _fmt_mmss(sec):
+    sec = int(abs(int(sec)))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def _fmt_span(sec):
+    sec = int(sec or 0)
+    if sec >= 3600:
+        return f"{sec // 3600} ชม. {sec % 3600 // 60} นาที"
+    if sec >= 60:
+        return f"{sec // 60} นาที {sec % 60} วิ"
+    return f"{sec} วิ"
+
+
+def close_break_popup(acked=False):
+    """เก็บป้าย — acked=True คือผู้ใช้กดรับทราบเอง (รอบนั้นจะไม่เด้งซ้ำจนกว่าจะเกินเวลาจริง)"""
+    if acked:
+        break_state["acked"] = break_state.get("key")
+    stop_break_alert()  # เก็บป้ายแล้วต้องเงียบทันที ทั้งเสียงเตือนและเสียงพูดที่ตั้งคิวไว้
+    if break_state.get("tick") is not None:
+        try:
+            root.after_cancel(break_state["tick"])
+        except Exception:
+            pass
+        break_state["tick"] = None
+    win = break_state["win"]
+    break_state["win"] = None
+    if win is not None:
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+
+
+def _break_tick():
+    """นับถอยหลังเองที่เครื่อง — ไม่ต้องรอเซิร์ฟเวอร์ส่งทุกวินาที ตัวเลขจึงเดินลื่นและตรง"""
+    win = break_state["win"]
+    if win is None or not win.winfo_exists():
+        break_state["tick"] = None
+        return
+    left = break_state["deadline"] - time.time()
+    act = break_state["activity"]
+    if left >= 0:
+        text = f"⏳ {act} — เหลืออีก {_fmt_mmss(left)} นาที รีบกดกลับที่นั่งด่วน"
+        color = C["amber"]
+    else:
+        text = f"🔴 {act} — เกินเวลามาแล้ว {_fmt_mmss(left)} นาที กดกลับที่นั่งด่วน"
+        color = C["red"]
+    try:
+        win.info_label.config(text=text, fg=color)
+    except Exception:
+        pass
+    break_state["tick"] = root.after(1000, _break_tick)
+
+
+def show_break_popup(alert):
+    activity = str(alert.get("activity") or "ออกไปข้างนอก")
+    key = f"{activity}|{alert.get('since') or ''}"
+    over = bool(alert.get("over"))
+    if break_state.get("acked") == key and not over:
+        return  # กดรับทราบรอบนี้ไปแล้ว — จะกวนอีกทีก็ต่อเมื่อเกินเวลาจริงเท่านั้น
+    try:
+        remaining = int(alert.get("remaining") or 0)
+    except (TypeError, ValueError):
+        remaining = 0
+    break_state.update({"deadline": time.time() + remaining, "activity": activity, "key": key})
+
+    win = break_state["win"]
+    if win is not None and win.winfo_exists():
+        _break_tick()          # ป้ายอยู่บนจอแล้ว — อัพเดทข้อความพอ ไม่ต้องสร้างใหม่
+        if over:
+            play_break_alert()  # เพิ่งเปลี่ยนเป็น "เกินเวลา" — ส่งเสียงย้ำอีกครั้งหนึ่ง
+        return
+
+    win = tk.Toplevel(root)
+    break_state["win"] = win
+    win.title("⏰ ใกล้หมดเวลา")
+    win.configure(bg=C["bg"])
+    win.resizable(False, False)
+    win.overrideredirect(True)  # ป้ายล้วนๆ ไม่มีแถบหัวหน้าต่าง — แบบเดียวกับป้ายเตือนเช็คชื่อ
+    win.attributes("-topmost", True)
+    win.protocol("WM_DELETE_WINDOW", lambda: close_break_popup(acked=True))
+    try:
+        if _icon is not None:
+            win.iconphoto(False, _icon)
+    except Exception:
+        pass
+
+    img = None
+    try:
+        img = tk.PhotoImage(file=resource_path("alert_break.png"))
+        if img.width() > root.winfo_screenwidth() - 120:
+            img = img.subsample(2, 2)  # จอเล็กก็ยังเห็นทั้งรูป
+    except Exception:
+        img = None
+    break_state["img"] = img  # ต้องอ้างอิงค้างไว้ ไม่งั้นรูปหาย
+
+    if img is not None:
+        tk.Label(win, image=img, bg=C["bg"], bd=0).pack(padx=10, pady=(10, 4))
+    else:  # ไม่มีรูปก็ยังต้องเตือนได้
+        tk.Label(win, text="⏰ ใกล้หมดเวลาแล้ว!", font=("Segoe UI", 22, "bold"),
+                 bg=C["bg"], fg=C["red"]).pack(padx=40, pady=(24, 8))
+
+    info = tk.Label(win, text="", font=("Segoe UI", 14, "bold"), bg=C["bg"], fg=C["amber"])
+    info.pack(pady=(0, 4))
+    win.info_label = info
+    GoldButton(win, "✅ รับทราบ", w=240, kind="red",
+               command=lambda: close_break_popup(acked=True), bg=C["bg"]).pack(pady=(2, 14))
+
+    # จัดกลางจอ — ต้องให้ Tk คำนวณขนาดจริงก่อน ไม่งั้นได้ขนาดหลอกแล้ววางเบี้ยว
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    base_x, base_y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
+    win.geometry(f"{w}x{h}+{base_x}+{base_y}")
+
+    def shake(n=0):
+        if break_state["win"] is not win or not win.winfo_exists():
+            return  # ปิดไปแล้วหรือถูกแทนที่ — หยุดสั่น
+        dx = int(9 * math.sin(n * 0.9)) if n % 90 < 30 else 0  # สั่นเป็นชุด เว้นจังหวะ
+        win.geometry(f"{w}x{h}+{base_x + dx}+{base_y}")
+        win.lift()
+        win.after(35, shake, n + 1)
+
+    shake()
+    _break_tick()
+    play_break_alert()  # เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูดว่าใกล้หมดเวลา ให้รีบกดกลับ
+
+
+@sio.on("break_warning")
+def on_break_warning(data):
+    root.after(0, show_break_popup, data if isinstance(data, dict) else {})
+
+
+@sio.on("break_warning_clear")
+def on_break_warning_clear(data=None):
+    # กลับที่นั่งแล้ว (หรือเปลี่ยนกิจกรรม) — เก็บป้ายให้เอง และพร้อมเตือนรอบใหม่ได้อีก
     def _apply():
-        if rnd:
-            checkin_state["cleared"] = {"round": rnd, "at": time.time()}
-        _cancel_checkin_timer()   # หยุดเสียงย้ำ — เขาเช็คแล้ว ไม่ต้องเร่งอีก
-        stop_checkin_alert()
-        win = checkin_state["win"]
-        if win is not None and win.winfo_exists():
-            try:
-                win.info_label.config(text="✅ เช็คชื่อเรียบร้อยแล้ว — กดปิดได้เลย")
-            except Exception:
-                pass
-        else:
-            checkin_state["alert"] = None   # ไม่มีรูปค้างอยู่แล้ว ล้างสถานะได้เลย
-
+        break_state["acked"] = None
+        close_break_popup()
     root.after(0, _apply)
+
+
+# ========== 📊 สถิติของฉันวันนี้ (ตัดรอบ 02:00 น.) ==========
+stats_state = {"win": None}
+
+
+def request_my_stats():
+    """ขอสถิติของตัวเองจากเซิร์ฟเวอร์ — เห็นเฉพาะของตัวเอง ไม่เห็นของคนอื่น"""
+    if not state["connected"]:
+        messagebox.showwarning("⚠️ ยังไม่เชื่อมต่อ",
+                               "ยังเชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — รอสักครู่แล้วลองใหม่")
+        return
+    who = name_entry.get().strip() or state.get("name") or ""
+    if not who:
+        messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาใส่ชื่อก่อน แล้วค่อยกดดูสถิติ")
+        return
+    set_status("📊 กำลังโหลดสถิติของคุณ...", C["muted"])
+    try:
+        sio.emit("get_my_stats", {"name": who})
+    except Exception:
+        set_status("⚠️ ส่งคำขอไม่สำเร็จ — ลองใหม่อีกครั้ง", C["amber"])
+
+
+def show_my_stats(data):
+    if not data.get("ok"):
+        set_status("")
+        messagebox.showwarning("📊 สถิติของฉัน", data.get("msg") or "ยังดูสถิติไม่ได้ตอนนี้")
+        return
+
+    row = data.get("row") or {}
+    acts = data.get("activities") or []
+    limits = data.get("limits") or {}
+    reset_hour = data.get("reset_hour")
+    reset_txt = f"{int(reset_hour):02d}:00 น." if isinstance(reset_hour, (int, float)) else "02:00 น."
+
+    old = stats_state.get("win")
+    if old is not None:
+        try:
+            if old.winfo_exists():
+                old.destroy()
+        except Exception:
+            pass
+
+    win = tk.Toplevel(root)
+    stats_state["win"] = win
+    win.title("📊 สถิติของฉันวันนี้")
+    win.configure(bg=C["bg"])
+    win.resizable(False, False)
+    try:
+        if _icon is not None:
+            win.iconphoto(False, _icon)
+    except Exception:
+        pass
+
+    tk.Label(win, text=f"📊 {data.get('username') or ''}", font=F_TITLE,
+             bg=C["bg"], fg=C["gold"]).pack(pady=(14, 0))
+    tk.Label(win, text=f"วันทำงาน {data.get('day') or ''} · เริ่มนับรอบใหม่ทุกวันเวลา {reset_txt}",
+             font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(pady=(2, 10))
+
+    table = ttk.Treeview(win, columns=("act", "count", "total", "over"), show="headings",
+                         height=max(3, len(acts) + 1), style="Odol.Treeview")
+    table.heading("act", text="🚪 ออกไปทำอะไร")
+    table.heading("count", text="จำนวนครั้ง")
+    table.heading("total", text="⏱️ ใช้เวลารวม")
+    table.heading("over", text="⚠️ เกินเวลา")
+    table.column("act", width=210)
+    table.column("count", width=100, anchor="center")
+    table.column("total", width=150, anchor="center")
+    table.column("over", width=150, anchor="center")
+    table.tag_configure("over", foreground=C["red"])
+    table.tag_configure("total", foreground=C["gold_light"])
+    table.pack(padx=18, fill="x")
+
+    for act in acts:
+        st = (row.get("activities") or {}).get(act) or {}
+        limit = limits.get(act)
+        name = f"{act} (ครั้งละ {int(limit) // 60} นาที)" if limit else act
+        over_txt = "—"
+        if st.get("over_count"):
+            over_txt = f"{st['over_count']} ครั้ง · {_fmt_span(st.get('over_seconds'))}"
+        table.insert("", "end", tags=("over",) if st.get("over_count") else (),
+                     values=(name, f"{int(st.get('count') or 0)} ครั้ง",
+                             _fmt_span(st.get("seconds")), over_txt))
+
+    over_all = "—"
+    if row.get("over_count"):
+        over_all = f"{row['over_count']} ครั้ง · {_fmt_span(row.get('over_seconds'))}"
+    table.insert("", "end", tags=("total",),
+                 values=("รวมทั้งหมด", f"{int(row.get('total_count') or 0)} ครั้ง",
+                         _fmt_span(row.get("total_seconds")), over_all))
+
+    cur = row.get("current") or None
+    if cur:
+        limit = cur.get("limit")
+        left = (int(limit) - int(cur.get("seconds") or 0)) if limit else None
+        if left is None:
+            note = f"🚪 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
+            color = C["amber"]
+        elif left >= 0:
+            note = (f"🚪 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
+                    f" — เหลืออีก {_fmt_mmss(left)} นาที")
+            color = C["amber"]
+        else:
+            note = (f"🔴 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
+                    f" — เกินเวลามาแล้ว {_fmt_mmss(left)} นาที")
+            color = C["red"]
+        tk.Label(win, text=note, font=F_BOLD, bg=C["bg"], fg=color).pack(pady=(10, 0))
+    else:
+        tk.Label(win, text="✅ ตอนนี้อยู่ที่นั่ง", font=F_BOLD,
+                 bg=C["bg"], fg=C["green"]).pack(pady=(10, 0))
+
+    btns = tk.Frame(win, bg=C["bg"])
+    btns.pack(pady=12)
+    GoldButton(btns, "🔄 โหลดใหม่", w=150, kind="blue",
+               command=lambda: request_my_stats(), bg=C["bg"]).pack(side="left", padx=8)
+    GoldButton(btns, "ปิด", w=110, kind="dark",
+               command=win.destroy, bg=C["bg"]).pack(side="left", padx=8)
+
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 30)}")
+    set_status("")
+
+
+@sio.on("my_stats")
+def on_my_stats(data):
+    root.after(0, show_my_stats, data if isinstance(data, dict) else {})
 
 
 # ========== popup เช็คชื่อ — สั่นเรียกความสนใจ + มีเสียง ==========
@@ -954,13 +1289,49 @@ def render_rooms(rooms):
             room_tree.selection_set(iid)
 
 
+# ข้อมูลจากระบบ check-status ที่เซิร์ฟเวอร์ส่งมาให้ทั้งห้อง (ใครออกไปทำอะไร ใช้เวลาไปเท่าไหร่แล้ววันนี้)
+status_info = {"people": {}}
+ACTIVITY_SHORT = {"กลับที่นั่ง": "✅ อยู่ที่นั่ง", "ปวดหนัก": "🚻 ปวดหนัก",
+                  "ปวดน้อย": "🚻 ปวดน้อย", "กินข้าว": "🍚 กินข้าว"}
+
+
+def _member_extra(name):
+    """คืน (ตอนนี้ทำอะไร, ออกไปวันนี้รวมเท่าไหร่, เกินเวลาไหม) ของคนหนึ่งในห้อง"""
+    info = status_info["people"].get(name) or {}
+    if info.get("match") != "ok":
+        return "—", "—", False
+    act = info.get("activity") or ""
+    label = ACTIVITY_SHORT.get(act, act or "—")
+    if act and act != "กลับที่นั่ง":
+        label += f" · {_fmt_span(info.get('duration'))}"
+    total = int(info.get("total_today") or 0)
+    return label, (_fmt_span(total) if total else "—"), bool(info.get("over"))
+
+
 def render_members(data):
     if data["room"] != state["room"]:
         return
+    state["members_cache"] = data  # เก็บไว้วาดใหม่ตอนข้อมูลสถานะอัปเดต
     member_tree.delete(*member_tree.get_children())
     for m in data["members"]:
-        tags = ("me",) if m["name"] == state["name"] else ()
-        member_tree.insert("", "end", values=(m["name"], STATUS_TH.get(m["status"], m["status"])), tags=tags)
+        act_txt, today_txt, over = _member_extra(m["name"])
+        tags = ("over",) if over else (("me",) if m["name"] == state["name"] else ())
+        member_tree.insert("", "end", tags=tags,
+                           values=(m["name"], STATUS_TH.get(m["status"], m["status"]),
+                                   act_txt, today_txt))
+
+
+@sio.on("members_status")
+def on_members_status(data):
+    """เซิร์ฟเวอร์ส่งสถานะจากระบบ check-status มาให้ทั้งห้อง — เอามาเติมสองคอลัมน์ขวา"""
+    def _apply():
+        if not isinstance(data, dict) or data.get("room") != state["room"]:
+            return
+        status_info["people"] = data.get("people") or {}
+        cached = state.get("members_cache")
+        if cached:
+            render_members(cached)
+    root.after(0, _apply)
 
 
 # ========== เหตุการณ์จากเซิร์ฟเวอร์ ==========
@@ -1061,6 +1432,11 @@ def connect():
 # ========== เชื่อมต่อ — ทำงานเบื้องหลัง ลองใหม่เรื่อย ๆ จนกว่าจะเจอ ==========
 def candidate_urls():
     urls = []
+    # 🧪 ทดสอบกับเซิร์ฟเวอร์ตัวอื่น: ตั้ง env ODOL_URL แล้วเปิดโปรแกรม (ใช้ชื่อเดียวกับใน tests/)
+    #    ปกติไม่มีใครตั้ง ค่านี้จึงไม่กระทบการใช้งานจริงเลย
+    test_url = os.environ.get("ODOL_URL", "").strip()
+    if test_url:
+        urls.append(normalize_target(test_url))
     # ✅ โดเมนคลาวด์ Railway ขึ้นมาเป็นอันดับแรก (remote-first สำหรับต่างจังหวัด)
     #    เซิร์ฟเวอร์ส่ง server_domain มาใน config (key ngrok_domain เดิมก็ชี้ที่เดียวกัน)
     cfg = state.get("server_config", {})

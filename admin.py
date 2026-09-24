@@ -440,6 +440,8 @@ GoldButton(lobby_btns, "🔄 รีเฟรช", w=130, kind="blue",
            command=lambda: refresh_now(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(lobby_btns, "📜 ประวัติการเช็ค", w=190, kind="dark",
            command=lambda: open_history(), bg=C["bg"]).pack(side="left", padx=6)
+GoldButton(lobby_btns, "📊 สถิติวันนี้", w=170, kind="dark",
+           command=lambda: open_day_stats(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(lobby_btns, "🗑️ ลบห้อง", w=140, kind="red",
            command=lambda: delete_selected_room(), bg=C["bg"]).pack(side="left", padx=6)
 
@@ -489,7 +491,7 @@ room_info_label.pack(side="left", padx=16, pady=(6, 0))
 member_card = RoundedCard(room_view, 980, 360)  # กว้างพอให้ทุกคอลัมน์แสดงครบไม่โดนตัด
 member_card.pack(pady=6)
 member_tree = ttk.Treeview(member_card.inner,
-                           columns=("name", "status", "time", "elapsed", "activity"),
+                           columns=("name", "status", "time", "elapsed", "activity", "today"),
                            show="tree headings", height=7, style="Odol.Treeview")
 # คอลัมน์ #0 ใช้โชว์จุดสีของการเช็คชื่อ 3 รอบ — Treeview ใส่รูปได้เฉพาะคอลัมน์นี้
 member_tree.heading("#0", text="🔔 เช็คชื่อ")           # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
@@ -498,13 +500,15 @@ member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("time", text="🕐 เวลาเข้างาน")
 member_tree.heading("elapsed", text="⏱️ ใช้เวลา")
 member_tree.heading("activity", text="🏃 สถานะตอนนี้")
-# ความกว้างรวม 930 พอดีกับพื้นที่ในการ์ด (980 - ขอบ 44) — ไม่มีคอลัมน์ไหนโดนตัด
-member_tree.column("#0", width=150, minwidth=140, stretch=False, anchor="w")
-member_tree.column("name", width=215, stretch=False)
-member_tree.column("status", width=150, anchor="center", stretch=False)
-member_tree.column("time", width=115, anchor="center", stretch=False)
-member_tree.column("elapsed", width=95, anchor="center", stretch=False)
-member_tree.column("activity", width=205, anchor="w")  # คอลัมน์สุดท้ายยืดเก็บที่ว่าง
+member_tree.heading("today", text="📊 ออกไปวันนี้")     # รวมเวลาออกไปข้างนอกทั้งวัน (ตัดรอบ 02:00)
+# ความกว้างรวม 925 พอดีกับพื้นที่ในการ์ด (980 - ขอบ 44) — ไม่มีคอลัมน์ไหนโดนตัด
+member_tree.column("#0", width=140, minwidth=130, stretch=False, anchor="w")
+member_tree.column("name", width=195, stretch=False)
+member_tree.column("status", width=130, anchor="center", stretch=False)
+member_tree.column("time", width=95, anchor="center", stretch=False)
+member_tree.column("elapsed", width=85, anchor="center", stretch=False)
+member_tree.column("activity", width=170, anchor="w", stretch=False)
+member_tree.column("today", width=110, anchor="center")  # คอลัมน์สุดท้ายยืดเก็บที่ว่าง
 member_tree.pack(fill="both", expand=True)
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 member_tree.tag_configure("muted", foreground=C["muted"])
@@ -651,6 +655,153 @@ def manual_connect():
     state["manual_ip"] = addr
     set_status(f"🔌 กำลังเชื่อมต่อไปที่ {addr} ...", C["amber"])
     force_rescan()
+
+
+# ========== 📊 หน้าสถิติการออกไปข้างนอกของพนักงาน (วันต่อวัน ตัดรอบ 02:00 น.) ==========
+def open_day_stats():
+    if not require_connection():
+        return
+    sio.emit("get_all_stats")
+    set_status("📊 กำลังโหลดสถิติวันนี้...", C["muted"])
+
+
+def _fmt_span(sec):
+    sec = int(sec or 0)
+    if sec >= 3600:
+        return f"{sec // 3600} ชม. {sec % 3600 // 60} นาที"
+    if sec >= 60:
+        return f"{sec // 60} นาที {sec % 60} วิ"
+    return f"{sec} วิ"
+
+
+def show_day_stats_window(payload):
+    if not payload.get("ok"):
+        set_status("")
+        messagebox.showwarning("📊 สถิติวันนี้", payload.get("msg") or "ยังดูสถิติไม่ได้ตอนนี้")
+        return
+
+    people = payload.get("people") or []
+    acts = payload.get("activities") or []
+    limits = payload.get("limits") or {}
+    reset_hour = payload.get("reset_hour")
+    reset_txt = f"{int(reset_hour):02d}:00 น." if isinstance(reset_hour, (int, float)) else "02:00 น."
+
+    win = tk.Toplevel(root)
+    win.title("📊 สถิติการออกไปข้างนอก — วันนี้")
+    win.geometry("1040x600")
+    win.configure(bg=C["bg"])
+    try:
+        if _icon is not None:
+            win.iconphoto(False, _icon)
+    except Exception:
+        pass
+
+    tk.Label(win, text=f"📊 สถิติวันนี้ — {len(people)} คนที่มีการออกไปข้างนอก",
+             font=F_HEAD, bg=C["bg"], fg=C["gold_light"]).pack(pady=(14, 2))
+    tk.Label(win, text=f"วันทำงาน {payload.get('day') or ''} · เริ่มนับรอบใหม่ทุกวันเวลา {reset_txt}"
+                       " · เวลานับจากที่กดในกลุ่ม Telegram",
+             font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(pady=(0, 8))
+
+    search_row = tk.Frame(win, bg=C["bg"])
+    search_row.pack(pady=(0, 6))
+    tk.Label(search_row, text="🔍 ค้นหาชื่อ:", font=F_SMALL, bg=C["bg"],
+             fg=C["muted"]).pack(side="left", padx=(0, 8))
+    search_entry = tk.Entry(search_row, font=F_SMALL, width=26, bg=C["field"], fg=C["text"],
+                            insertbackground=C["gold"], relief="flat", bd=6)
+    search_entry.pack(side="left")
+
+    table_wrap = tk.Frame(win, bg=C["card_dark"])
+    table_wrap.pack(fill="both", expand=True, padx=16)
+    cols = ["name"] + [f"act{i}" for i in range(len(acts))] + ["total", "over"]
+    tree = ttk.Treeview(table_wrap, columns=cols, show="headings", style="Odol.Treeview")
+    tree.heading("name", text="👤 ชื่อ")
+    tree.column("name", width=230, anchor="w")
+    for i, act in enumerate(acts):
+        limit = limits.get(act)
+        head = f"{act} ({int(limit) // 60} น.)" if limit else act
+        tree.heading(f"act{i}", text=head)
+        tree.column(f"act{i}", width=165, anchor="center")
+    tree.heading("total", text="⏱️ รวมทั้งวัน")
+    tree.column("total", width=165, anchor="center")
+    tree.heading("over", text="⚠️ เกินเวลา")
+    tree.column("over", width=165, anchor="center")
+    tree.tag_configure("over", foreground=C["red"])
+    tree.tag_configure("out", foreground=C["amber"])
+    vs = ttk.Scrollbar(table_wrap, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=vs.set)
+    vs.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
+
+    def row_values(p):
+        cells = [p.get("username") or ""]
+        for act in acts:
+            st = (p.get("activities") or {}).get(act) or {}
+            count = int(st.get("count") or 0)
+            cells.append(f"{count} ครั้ง · {_fmt_span(st.get('seconds'))}" if count or st.get("seconds") else "—")
+        cells.append(f"{int(p.get('total_count') or 0)} ครั้ง · {_fmt_span(p.get('total_seconds'))}")
+        cells.append(f"{p['over_count']} ครั้ง · {_fmt_span(p.get('over_seconds'))}"
+                     if p.get("over_count") else "—")
+        return cells
+
+    def fill(keyword=""):
+        tree.delete(*tree.get_children())
+        key = keyword.strip().lower()
+        for p in people:
+            name = (p.get("username") or "")
+            if key and key not in name.lower():
+                continue
+            cur = p.get("current") or None
+            tag = "over" if p.get("over_count") else ("out" if cur else "")
+            label = row_values(p)
+            if cur:  # ยังไม่กลับที่นั่ง — บอกไว้ข้างชื่อเลย จะได้เห็นทันทีว่าใครยังออกอยู่
+                label[0] = f"{label[0]}  🚪 {cur.get('activity') or ''}"
+            tree.insert("", "end", tags=(tag,) if tag else (), values=label)
+
+    fill()
+    search_entry.bind("<KeyRelease>", lambda e: fill(search_entry.get()))
+
+    def export_csv():
+        default = f"สถิติออกไปข้างนอก_{payload.get('day') or time.strftime('%Y%m%d')}.csv"
+        path = filedialog.asksaveasfilename(
+            title="บันทึกสถิติวันนี้", defaultextension=".csv",
+            initialfile=default, filetypes=[("ไฟล์ CSV", "*.csv")])
+        if not path:
+            return
+        try:
+            # utf-8-sig เพื่อให้ Excel ภาษาไทยเปิดแล้วไม่เป็นตัวยึกยือ
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                head = ["ชื่อ"]
+                for act in acts:
+                    head += [f"{act} (ครั้ง)", f"{act} (วินาที)"]
+                head += ["รวมครั้ง", "รวมวินาที", "เกินเวลา (ครั้ง)", "เกินเวลา (วินาที)", "ตอนนี้"]
+                w.writerow(head)
+                for p in people:
+                    line = [p.get("username") or ""]
+                    for act in acts:
+                        st = (p.get("activities") or {}).get(act) or {}
+                        line += [int(st.get("count") or 0), int(st.get("seconds") or 0)]
+                    cur = p.get("current") or None
+                    line += [int(p.get("total_count") or 0), int(p.get("total_seconds") or 0),
+                             int(p.get("over_count") or 0), int(p.get("over_seconds") or 0),
+                             (cur or {}).get("activity") or "อยู่ที่นั่ง"]
+                    w.writerow(line)
+            messagebox.showinfo("✅ บันทึกสำเร็จ", f"บันทึกสถิติแล้วที่:\n{path}")
+        except OSError as e:
+            messagebox.showerror("❌ บันทึกไม่สำเร็จ", f"เกิดข้อผิดพลาด:\n{e}")
+
+    btns = tk.Frame(win, bg=C["bg"])
+    btns.pack(pady=12)
+    GoldButton(btns, "💾 บันทึกเป็นไฟล์ .csv", w=230, kind="gold",
+               command=export_csv, bg=C["bg"]).pack(side="left", padx=8)
+    GoldButton(btns, "🔄 โหลดใหม่", w=150, kind="blue",
+               command=lambda: (win.destroy(), open_day_stats()), bg=C["bg"]).pack(side="left", padx=8)
+    set_status("")
+
+
+@sio.on("all_stats")
+def on_all_stats(data):
+    root.after(0, show_day_stats_window, data if isinstance(data, dict) else {})
 
 
 # ========== หน้าประวัติการเช็คชื่อ ==========
@@ -841,17 +992,23 @@ def _activity_text(info):
     return label
 
 
+def _today_text(info):
+    """เวลาที่คนนี้ออกไปข้างนอกรวมทั้งวันนี้ (ตัดรอบ 02:00 น. ตามรอบสถิติ)"""
+    secs = int(info.get("total_today") or 0)
+    return _fmt_dur(secs) if secs else "—"
+
+
 def _status_cells(name):
-    """คืน (รูปจุดสี, ข้อความช่องเช็คชื่อ, ข้อความสถานะ, เกินเวลาไหม) ของพนักงานคนหนึ่ง"""
+    """คืน (รูปจุดสี, ข้อความช่องเช็คชื่อ, ข้อความสถานะ, เกินเวลาไหม, เวลารวมวันนี้) ของพนักงานคนหนึ่ง"""
     info = status_info["people"].get(name)
     if not info:
-        return None, "—", "—", False
+        return None, "—", "—", False, "—"
     if info.get("match") == "ambiguous":
-        return None, "—", "❓ ชื่อซ้ำหลายคน", False
+        return None, "—", "❓ ชื่อซ้ำหลายคน", False, "—"
     if info.get("match") != "ok":
-        return None, "—", "❓ ไม่พบในระบบ", False
+        return None, "—", "❓ ไม่พบในระบบ", False, "—"
     img, txt = _rounds_cell(info)
-    return img, txt, _activity_text(info), bool(info.get("over"))
+    return img, txt, _activity_text(info), bool(info.get("over")), _today_text(info)
 
 
 @sio.on("do_update")
@@ -883,10 +1040,10 @@ def render_members(data):
     for m in data["members"]:
         label, tag = STATUS_TH.get(m["status"], (m["status"], "muted"))
         elapsed = f"{m['elapsed']} วิ" if m.get("elapsed") else "—"
-        dots_img, rounds_txt, act_txt, over = _status_cells(m["name"])
+        dots_img, rounds_txt, act_txt, over, today_txt = _status_cells(m["name"])
         member_tree.insert("", "end", iid=m["sid"],
                            text=rounds_txt, image=dots_img or "",
-                           values=(m["name"], label, m["time"] or "—", elapsed, act_txt),
+                           values=(m["name"], label, m["time"] or "—", elapsed, act_txt, today_txt),
                            tags=("over",) if over else (tag,))
         if m["sid"] in selected:
             member_tree.selection_add(m["sid"])
@@ -962,6 +1119,12 @@ def connect():
         if state["room"] is None:
             show_lobby()
     root.after(0, _apply)
+    # ✅ บอกเซิร์ฟเวอร์ว่านี่คือโปรแกรมแอดมิน — จะได้กดดูสถิติได้ตั้งแต่หน้าล็อบบี้ (ยังไม่ได้เข้าห้อง)
+    #    และเซิร์ฟเวอร์นับเวอร์ชันของเครื่องแอดมินได้ด้วย
+    try:
+        sio.emit("set_identity", {"app": "admin", "version": updater.APP_VERSION})
+    except Exception:
+        pass
     # ✅ เน็ตสะดุดแล้วต่อกลับมา — เข้าห้องเดิมคืนอัตโนมัติ (เซิร์ฟเวอร์ล้างสถานะตอนหลุด)
     if state["room"]:
         try:
@@ -973,6 +1136,10 @@ def connect():
 # ========== เชื่อมต่อ — ทำงานเบื้องหลัง ลองใหม่เรื่อย ๆ จนกว่าจะเจอ ==========
 def candidate_urls():
     urls = []
+    # 🧪 ทดสอบกับเซิร์ฟเวอร์ตัวอื่น: ตั้ง env ODOL_URL แล้วเปิดโปรแกรม (ใช้ชื่อเดียวกับใน tests/)
+    test_url = os.environ.get("ODOL_URL", "").strip()
+    if test_url:
+        urls.append(normalize_target(test_url))
     if state["manual_ip"]:
         urls.append(normalize_target(state["manual_ip"]))  # ที่ผู้ใช้พิมพ์เอง มาก่อน
     if PINNED:
