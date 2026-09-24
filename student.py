@@ -171,7 +171,7 @@ def save_name(name):
 _sound_ready = False
 _alert_sounds = []  # ✅ ฟีเจอร์ใหม่: เสียงแจ้งหลายตัว
 _checkin_sound = None  # 🔔 เสียงเตือน "ถึงรอบเช็คชื่อในกลุ่ม" (คนละตัวกับเสียงเรียกของแอดมิน)
-_break_voice = None  # ⏰ เสียงพูด "ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง" — ใช้เมื่อไม่รู้จักกิจกรรม
+_break_voice = None  # ⏰ เสียงพูด "ใกล้หมดเวลาแล้ว อย่าลืมกดกลับที่นั่งด้วยนะ" — ใช้เมื่อไม่รู้จักกิจกรรม
 # ⏰ เสียงพูดแยกตามกิจกรรม — บอกไปเลยว่ากำลังจะหมดเวลาของอะไร ("ปวดน้อย ใกล้หมดเวลาแล้ว...")
 _break_voice_files = {"ปวดน้อย": "alert_break_light.mp3",
                       "ปวดหนัก": "alert_break_heavy.mp3",
@@ -222,17 +222,6 @@ def init_sound():
         pass
 
 
-def _mci_length_ms(alias, default=4500):
-    """ถามความยาวไฟล์เสียงจาก MCI — ใช้กะจังหวะให้เสียงถัดไปเล่นต่อพอดี ไม่ทับกัน"""
-    try:
-        buf = ctypes.create_unicode_buffer(64)
-        if ctypes.windll.winmm.mciSendStringW(f"status {alias} length", buf, 64, None) == 0:
-            return int(buf.value)
-    except Exception:
-        pass
-    return default
-
-
 def play_break_voice(activity=""):
     # เลือกเสียงที่บอกกิจกรรมนั้นก่อน ("ปวดน้อย ใกล้หมดเวลาแล้ว...") ไม่มีค่อยใช้เสียงกลาง
     alias = _break_voices.get(activity) or _break_voice
@@ -245,29 +234,13 @@ def play_break_voice(activity=""):
         pass
 
 
-def cancel_break_voice():
-    aid = break_state.get("voice_after")
-    if aid:
-        try:
-            root.after_cancel(aid)
-        except Exception:
-            pass
-        break_state["voice_after"] = None
-
-
 def play_break_alert(activity=""):
-    """เสียงป้ายใกล้หมดเวลา = เสียงเดียวกับตอนเช็คชื่อ แล้วตามด้วยเสียงพูดที่บอกกิจกรรมด้วย
-    เช่น "ปวดหนัก ใกล้หมดเวลาแล้ว กรุณากดกลับที่นั่ง"
-    (รอให้เสียงแรกจบก่อนค่อยพูด ไม่งั้นสองเสียงทับกันจนฟังไม่รู้เรื่อง)"""
-    play_checkin_alert()
-    delay = _mci_length_ms(_checkin_sound) + 200 if _checkin_sound else 1000
-    cancel_break_voice()
-    break_state["voice_after"] = root.after(delay, lambda: play_break_voice(activity))
+    """เสียงป้ายใกล้หมดเวลา = เสียงพูดอย่างเดียว เช่น "ปวดหนัก ใกล้หมดเวลาแล้ว อย่าลืมกดกลับที่นั่งด้วยนะ"
+    (ไม่เอาเสียงเตือนเช็คชื่อมาเล่นนำแล้ว — คนละเรื่องกัน ฟังแล้วสับสน)"""
+    play_break_voice(activity)
 
 
 def stop_break_alert():
-    cancel_break_voice()
-    stop_checkin_alert()
     try:
         for alias in list(_break_voices.values()) + ([_break_voice] if _break_voice else []):
             ctypes.windll.winmm.mciSendStringW(f"stop {alias}", None, 0, None)
@@ -842,7 +815,7 @@ def on_checkin_alert_clear(data=None):
 # (ส่งซ้ำอีกครั้งตอนเกินเวลาจริง) — ป้ายขึ้นที่เครื่องของคนนั้นคนเดียว ไม่มีข้อความเข้ากลุ่ม Telegram
 # ป้ายค้างบนจอจนกดรับทราบ หรือจนกดกลับที่นั่งในกลุ่ม (เซิร์ฟเวอร์ส่ง break_warning_clear มาเอง)
 break_state = {"win": None, "img": None, "tick": None, "deadline": 0.0,
-               "activity": "", "key": None, "acked": None, "voice_after": None}
+               "activity": "", "key": None, "acked": None}
 
 
 def _fmt_mmss(sec):
