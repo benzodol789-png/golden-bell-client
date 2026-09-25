@@ -625,7 +625,7 @@ room_name_label.pack(pady=(14, 2))
 me_label = tk.Label(room_view, text="", font=F_NORMAL, bg=C["bg"], fg=C["muted"])
 me_label.pack()
 
-member_card = RoundedCard(room_view, 560, 300)
+member_card = RoundedCard(room_view, 640, 300)  # กว้างกว่าการ์ดอื่น — ตารางนี้มี 4 คอลัมน์
 member_card.pack(pady=8)
 tk.Label(member_card.inner, text="👥 พนักงานในห้องนี้", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 6))
@@ -634,11 +634,13 @@ member_tree = ttk.Treeview(member_card.inner, columns=("name", "status", "activi
 member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("activity", text="🏃 ตอนนี้")
-member_tree.heading("today", text="📊 ออกไปวันนี้")  # รวมเวลาออกไปข้างนอกทั้งวัน (ตัดรอบ 02:00)
-member_tree.column("name", width=160)
-member_tree.column("status", width=130, anchor="center")
-member_tree.column("activity", width=130, anchor="center")
-member_tree.column("today", width=100, anchor="center")
+member_tree.heading("today", text="📊 ออกไปกะนี้")  # รวมเวลาออกไปข้างนอกในรอบกะนี้
+# รวม 600 = พอดีพื้นที่ในการ์ด — กว้างพอข้อความยาวสุดที่เกิดได้จริง (วัดแล้ว):
+# ชื่อเต็ม "ODOL-NOODLES-769PG" 186px / "🚻 ปวดหนัก · 1 ชม. 59 น." 176px — เดิมหัวคอลัมน์ขวาสุดโดนตัด
+member_tree.column("name", width=190)
+member_tree.column("status", width=115, anchor="center")
+member_tree.column("activity", width=180, anchor="center")
+member_tree.column("today", width=115, anchor="center")
 member_tree.pack(fill="both", expand=True)
 member_tree.tag_configure("me", foreground=C["gold_light"])
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
@@ -824,12 +826,24 @@ def _fmt_mmss(sec):
 
 
 def _fmt_span(sec):
+    """เวลาแบบสั้นให้พอดีช่อง ไม่ล้น — 1 ชม. 19 น. / 35 น. / 5 น. 12 วิ / 45 วิ"""
     sec = int(sec or 0)
     if sec >= 3600:
-        return f"{sec // 3600} ชม. {sec % 3600 // 60} นาที"
+        return f"{sec // 3600} ชม. {sec % 3600 // 60} น."
+    if sec >= 600:
+        return f"{sec // 60} น."  # สิบนาทีขึ้นไป วินาทีไม่มีความหมายแล้ว
     if sec >= 60:
-        return f"{sec // 60} นาที {sec % 60} วิ"
+        return f"{sec // 60} น. {sec % 60} วิ"
     return f"{sec} วิ"
+
+
+def _period_text(data):
+    """ช่วงที่สถิตินับอยู่ — เซิร์ฟเวอร์ส่งป้ายกะมาให้ เช่น "กะเช้า 08:00-20:00 · 25 ก.ย." """
+    label = data.get("shift_label")
+    if label:
+        when = data.get("day_short") or data.get("day") or ""
+        return f"{label} · {when}" if when else label
+    return f"รอบวันที่ {data.get('day') or ''}".strip()
 
 
 def close_break_popup(acked=False):
@@ -970,7 +984,7 @@ def on_break_warning_clear(data=None):
     root.after(0, _apply)
 
 
-# ========== 📊 สถิติของฉันวันนี้ (ตัดรอบ 02:00 น.) ==========
+# ========== 📊 สถิติของฉันในกะนี้ (08:00-20:00 / 20:00-08:00) ==========
 stats_state = {"win": None}
 
 
@@ -1000,8 +1014,7 @@ def show_my_stats(data):
     row = data.get("row") or {}
     acts = data.get("activities") or []
     limits = data.get("limits") or {}
-    reset_hour = data.get("reset_hour")
-    reset_txt = f"{int(reset_hour):02d}:00 น." if isinstance(reset_hour, (int, float)) else "02:00 น."
+    period = _period_text(data)
 
     old = stats_state.get("win")
     if old is not None:
@@ -1013,7 +1026,7 @@ def show_my_stats(data):
 
     win = tk.Toplevel(root)
     stats_state["win"] = win
-    win.title("📊 สถิติของฉันวันนี้")
+    win.title("📊 สถิติของฉัน")
     win.configure(bg=C["bg"])
     win.resizable(False, False)
     try:
@@ -1024,19 +1037,18 @@ def show_my_stats(data):
 
     tk.Label(win, text=f"📊 {data.get('username') or ''}", font=F_TITLE,
              bg=C["bg"], fg=C["gold"]).pack(pady=(14, 0))
-    tk.Label(win, text=f"วันทำงาน {data.get('day') or ''} · เริ่มนับรอบใหม่ทุกวันเวลา {reset_txt}",
-             font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(pady=(2, 10))
+    tk.Label(win, text=period, font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(pady=(2, 10))
 
     table = ttk.Treeview(win, columns=("act", "count", "total", "over"), show="headings",
                          height=max(3, len(acts) + 1), style="Odol.Treeview")
-    table.heading("act", text="🚪 ออกไปทำอะไร")
-    table.heading("count", text="จำนวนครั้ง")
-    table.heading("total", text="⏱️ ใช้เวลารวม")
+    table.heading("act", text="🚪 กิจกรรม")
+    table.heading("count", text="ครั้ง")
+    table.heading("total", text="⏱️ รวม")
     table.heading("over", text="⚠️ เกินเวลา")
-    table.column("act", width=210)
-    table.column("count", width=100, anchor="center")
-    table.column("total", width=150, anchor="center")
-    table.column("over", width=150, anchor="center")
+    table.column("act", width=190)
+    table.column("count", width=80, anchor="center")
+    table.column("total", width=120, anchor="center")
+    table.column("over", width=140, anchor="center")
     table.tag_configure("over", foreground=C["red"])
     table.tag_configure("total", foreground=C["gold_light"])
     table.pack(padx=18, fill="x")
@@ -1044,7 +1056,7 @@ def show_my_stats(data):
     for act in acts:
         st = (row.get("activities") or {}).get(act) or {}
         limit = limits.get(act)
-        name = f"{act} (ครั้งละ {int(limit) // 60} นาที)" if limit else act
+        name = f"{act} ({int(limit) // 60} น.)" if limit else act
         over_txt = "—"
         if st.get("over_count"):
             over_txt = f"{st['over_count']} ครั้ง · {_fmt_span(st.get('over_seconds'))}"
@@ -1063,17 +1075,14 @@ def show_my_stats(data):
     if cur:
         limit = cur.get("limit")
         left = (int(limit) - int(cur.get("seconds") or 0)) if limit else None
+        act = cur.get("activity") or ""
+        used = _fmt_span(cur.get("seconds"))
         if left is None:
-            note = f"🚪 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
-            color = C["amber"]
+            note, color = f"🚪 ตอนนี้: {act} {used}", C["amber"]
         elif left >= 0:
-            note = (f"🚪 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
-                    f" — เหลืออีก {_fmt_mmss(left)} นาที")
-            color = C["amber"]
+            note, color = f"🚪 ตอนนี้: {act} {used} · เหลือ {_fmt_mmss(left)}", C["amber"]
         else:
-            note = (f"🔴 ตอนนี้ออกไป{cur.get('activity')} มาแล้ว {_fmt_span(cur.get('seconds'))}"
-                    f" — เกินเวลามาแล้ว {_fmt_mmss(left)} นาที")
-            color = C["red"]
+            note, color = f"🔴 ตอนนี้: {act} {used} · เกิน {_fmt_mmss(left)}", C["red"]
         tk.Label(win, text=note, font=F_BOLD, bg=C["bg"], fg=color).pack(pady=(10, 0))
     else:
         tk.Label(win, text="✅ ตอนนี้อยู่ที่นั่ง", font=F_BOLD,
@@ -1287,14 +1296,14 @@ def render_rooms(rooms):
             room_tree.selection_set(iid)
 
 
-# ข้อมูลจากระบบ check-status ที่เซิร์ฟเวอร์ส่งมาให้ทั้งห้อง (ใครออกไปทำอะไร ใช้เวลาไปเท่าไหร่แล้ววันนี้)
+# ข้อมูลจากระบบ check-status ที่เซิร์ฟเวอร์ส่งมาให้ทั้งห้อง (ใครออกไปทำอะไร ใช้เวลาไปเท่าไหร่แล้วในกะนี้)
 status_info = {"people": {}}
 ACTIVITY_SHORT = {"กลับที่นั่ง": "✅ อยู่ที่นั่ง", "ปวดหนัก": "🚻 ปวดหนัก",
                   "ปวดน้อย": "🚻 ปวดน้อย", "กินข้าว": "🍚 กินข้าว"}
 
 
 def _member_extra(name):
-    """คืน (ตอนนี้ทำอะไร, ออกไปวันนี้รวมเท่าไหร่, เกินเวลาไหม) ของคนหนึ่งในห้อง"""
+    """คืน (ตอนนี้ทำอะไร, ออกไปกะนี้รวมเท่าไหร่, เกินเวลาไหม) ของคนหนึ่งในห้อง"""
     info = status_info["people"].get(name) or {}
     if info.get("match") != "ok":
         return "—", "—", False

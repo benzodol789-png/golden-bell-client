@@ -486,7 +486,7 @@ GoldButton(lobby_btns, "🔄 รีเฟรช", w=130, kind="blue",
            command=lambda: refresh_now(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(lobby_btns, "📜 ประวัติการเช็ค", w=190, kind="dark",
            command=lambda: open_history(), bg=C["bg"]).pack(side="left", padx=6)
-GoldButton(lobby_btns, "📊 สถิติวันนี้", w=170, kind="dark",
+GoldButton(lobby_btns, "📊 สถิติกะนี้", w=170, kind="dark",
            command=lambda: open_day_stats(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(lobby_btns, "🗑️ ลบห้อง", w=140, kind="red",
            command=lambda: delete_selected_room(), bg=C["bg"]).pack(side="left", padx=6)
@@ -546,7 +546,7 @@ member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("time", text="🕐 เวลาเข้างาน")
 member_tree.heading("elapsed", text="⏱️ ใช้เวลา")
 member_tree.heading("activity", text="🏃 สถานะตอนนี้")
-member_tree.heading("today", text="📊 ออกไปวันนี้")     # รวมเวลาออกไปข้างนอกทั้งวัน (ตัดรอบ 02:00)
+member_tree.heading("today", text="📊 ออกไปกะนี้")     # รวมเวลาออกไปข้างนอกในรอบกะนี้
 # ความกว้างรวม 925 พอดีกับพื้นที่ในการ์ด (980 - ขอบ 44) — ไม่มีคอลัมน์ไหนโดนตัด
 member_tree.column("#0", width=140, minwidth=130, stretch=False, anchor="w")
 member_tree.column("name", width=195, stretch=False)
@@ -703,37 +703,47 @@ def manual_connect():
     force_rescan()
 
 
-# ========== 📊 หน้าสถิติการออกไปข้างนอกของพนักงาน (วันต่อวัน ตัดรอบ 02:00 น.) ==========
+# ========== 📊 หน้าสถิติการออกไปข้างนอกของพนักงาน (รายกะ 08:00-20:00 / 20:00-08:00) ==========
 def open_day_stats():
     if not require_connection():
         return
     sio.emit("get_all_stats")
-    set_status("📊 กำลังโหลดสถิติวันนี้...", C["muted"])
+    set_status("📊 กำลังโหลดสถิติกะนี้...", C["muted"])
 
 
 def _fmt_span(sec):
+    """เวลาแบบสั้นให้พอดีช่อง ไม่ล้น — 1 ชม. 19 น. / 35 น. / 5 น. 12 วิ / 45 วิ"""
     sec = int(sec or 0)
     if sec >= 3600:
-        return f"{sec // 3600} ชม. {sec % 3600 // 60} นาที"
+        return f"{sec // 3600} ชม. {sec % 3600 // 60} น."
+    if sec >= 600:
+        return f"{sec // 60} น."
     if sec >= 60:
-        return f"{sec // 60} นาที {sec % 60} วิ"
+        return f"{sec // 60} น. {sec % 60} วิ"
     return f"{sec} วิ"
+
+
+def _period_text(data):
+    """ช่วงที่สถิตินับอยู่ — เซิร์ฟเวอร์ส่งป้ายกะมาให้ เช่น "กะเช้า 08:00-20:00 · 25 ก.ย." """
+    label = data.get("shift_label")
+    if label:
+        when = data.get("day_short") or data.get("day") or ""
+        return f"{label} · {when}" if when else label
+    return f"รอบวันที่ {data.get('day') or ''}".strip()
 
 
 def show_day_stats_window(payload):
     if not payload.get("ok"):
         set_status("")
-        messagebox.showwarning("📊 สถิติวันนี้", payload.get("msg") or "ยังดูสถิติไม่ได้ตอนนี้")
+        messagebox.showwarning("📊 สถิติกะนี้", payload.get("msg") or "ยังดูสถิติไม่ได้ตอนนี้")
         return
 
     people = payload.get("people") or []
     acts = payload.get("activities") or []
     limits = payload.get("limits") or {}
-    reset_hour = payload.get("reset_hour")
-    reset_txt = f"{int(reset_hour):02d}:00 น." if isinstance(reset_hour, (int, float)) else "02:00 น."
 
     win = tk.Toplevel(root)
-    win.title("📊 สถิติการออกไปข้างนอก — วันนี้")
+    win.title("📊 สถิติกะนี้")
     win.geometry("1040x600")
     win.configure(bg=C["bg"])
     try:
@@ -742,10 +752,9 @@ def show_day_stats_window(payload):
     except Exception:
         pass
 
-    tk.Label(win, text=f"📊 สถิติวันนี้ — {len(people)} คนที่มีการออกไปข้างนอก",
+    tk.Label(win, text=f"📊 สถิติกะนี้ · {len(people)} คน",
              font=F_HEAD, bg=C["bg"], fg=C["gold_light"]).pack(pady=(14, 2))
-    tk.Label(win, text=f"วันทำงาน {payload.get('day') or ''} · เริ่มนับรอบใหม่ทุกวันเวลา {reset_txt}"
-                       " · เวลานับจากที่กดในกลุ่ม Telegram",
+    tk.Label(win, text=_period_text(payload),
              font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(pady=(0, 8))
 
     search_row = tk.Frame(win, bg=C["bg"])
@@ -767,7 +776,7 @@ def show_day_stats_window(payload):
         head = f"{act} ({int(limit) // 60} น.)" if limit else act
         tree.heading(f"act{i}", text=head)
         tree.column(f"act{i}", width=165, anchor="center")
-    tree.heading("total", text="⏱️ รวมทั้งวัน")
+    tree.heading("total", text="⏱️ รวม")
     tree.column("total", width=165, anchor="center")
     tree.heading("over", text="⚠️ เกินเวลา")
     tree.column("over", width=165, anchor="center")
@@ -807,9 +816,10 @@ def show_day_stats_window(payload):
     search_entry.bind("<KeyRelease>", lambda e: fill(search_entry.get()))
 
     def export_csv():
-        default = f"สถิติออกไปข้างนอก_{payload.get('day') or time.strftime('%Y%m%d')}.csv"
+        shift = payload.get("shift") or ""
+        default = f"สถิติกะ{shift}_{payload.get('day') or time.strftime('%Y%m%d')}.csv"
         path = filedialog.asksaveasfilename(
-            title="บันทึกสถิติวันนี้", defaultextension=".csv",
+            title="บันทึกสถิติกะนี้", defaultextension=".csv",
             initialfile=default, filetypes=[("ไฟล์ CSV", "*.csv")])
         if not path:
             return
@@ -1039,13 +1049,13 @@ def _activity_text(info):
 
 
 def _today_text(info):
-    """เวลาที่คนนี้ออกไปข้างนอกรวมทั้งวันนี้ (ตัดรอบ 02:00 น. ตามรอบสถิติ)"""
+    """เวลาที่คนนี้ออกไปข้างนอกรวมในรอบกะนี้ (08:00-20:00 / 20:00-08:00)"""
     secs = int(info.get("total_today") or 0)
     return _fmt_dur(secs) if secs else "—"
 
 
 def _status_cells(name):
-    """คืน (รูปจุดสี, ข้อความช่องเช็คชื่อ, ข้อความสถานะ, เกินเวลาไหม, เวลารวมวันนี้) ของพนักงานคนหนึ่ง"""
+    """คืน (รูปจุดสี, ข้อความช่องเช็คชื่อ, ข้อความสถานะ, เกินเวลาไหม, เวลารวมกะนี้) ของพนักงานคนหนึ่ง"""
     info = status_info["people"].get(name)
     if not info:
         return None, "—", "—", False, "—"
