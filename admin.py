@@ -255,6 +255,7 @@ STATUS_TH = {
     "wait": ("⏳ ยังไม่เช็คชื่อ", "muted"),
     "pending": ("🔔 รอยืนยัน...", "amber"),
     "checked": ("✅ เข้างานแล้ว", "green"),
+    "no_response": ("⌛ ไม่ตอบ", "amber"),  # เรียกครบ 10 นาทีแล้วไม่กดยืนยัน
 }
 
 # ========== หน้าต่างหลัก ==========
@@ -565,10 +566,27 @@ room_btns = tk.Frame(room_view, bg=C["bg"])
 room_btns.pack(pady=12)
 GoldButton(room_btns, "🔔 เช็คชื่อคนที่เลือก", w=250, kind="gold",
            command=lambda: check_selected(), bg=C["bg"]).pack(side="left", padx=10)
+GoldButton(room_btns, "✖ ยกเลิกเรียก", w=190, kind="red",
+           command=lambda: cancel_selected(), bg=C["bg"]).pack(side="left", padx=10)
 GoldButton(room_btns, "🚪 ออกจากห้อง", w=190, kind="dark",
            command=lambda: leave_room(), bg=C["bg"]).pack(side="left", padx=10)
-tk.Label(room_view, text="💡 เลือกชื่อในตารางแล้วกดปุ่มเช็คชื่อ หรือดับเบิลคลิกที่ชื่อได้เลย",
-         font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack()
+def _timeout_text(seconds):
+    seconds = int(seconds or 600)
+    return f"{seconds // 60} นาที" if seconds % 60 == 0 else f"{seconds} วินาที"
+
+
+def _room_hint_text(timeout=None):
+    base = "💡 เลือกชื่อในตารางแล้วกดปุ่มเช็คชื่อ หรือดับเบิลคลิกที่ชื่อได้เลย"
+    if not timeout:  # เซิร์ฟเวอร์รุ่นเก่า — ยังไม่มีกติกา 10 นาที/การยกเลิก อย่าบอกสิ่งที่ยังใช้ไม่ได้
+        return base
+    return (f"{base}  •  ไม่กดยืนยันภายใน {_timeout_text(timeout)} = ไม่ตอบ\n"
+            "กดเรียกผิด (เช่น คนนั้นไปเข้าห้องน้ำ/กินข้าวอยู่) เลือกชื่อแล้วกด "
+            "✖ ยกเลิกเรียก — ไม่นับว่าไม่ตอบ (ขึ้นไม่ตอบไปแล้วก็ยังยกเลิกได้)")
+
+
+room_hint = tk.Label(room_view, text=_room_hint_text(), font=F_SMALL, bg=C["bg"],
+                     fg=C["muted"], justify="center")
+room_hint.pack()
 
 
 def refit():
@@ -640,25 +658,102 @@ def leave_room():
     sio.emit("leave_room")
 
 
+def require_admin_name(action):
+    # ✅ ต้องใส่ชื่อแอดมินก่อน — ประวัติจะได้ระบุได้ว่าใครเป็นคนกด
+    if state.get("admin_name"):
+        return True
+    messagebox.showwarning("⚠️ แจ้งเตือน",
+                           f"กรุณาใส่ชื่อแอดมิน (ช่องมุมขวาบน) ก่อน{action}\n"
+                           "ประวัติจะบันทึกว่าใครเป็นคนกด")
+    admin_name_entry.focus_set()
+    return False
+
+
 def check_selected():
     if not require_connection():
         return
-    # ✅ ต้องใส่ชื่อแอดมินก่อนเรียก — ประวัติจะได้ระบุได้ว่าใครเป็นคนกด
-    if not state.get("admin_name"):
-        messagebox.showwarning("⚠️ แจ้งเตือน",
-                               "กรุณาใส่ชื่อแอดมิน (ช่องมุมขวาบน) ก่อนเรียกเช็คชื่อ\n"
-                               "ประวัติจะบันทึกว่าใครเป็นคนกดเรียก")
-        admin_name_entry.focus_set()
+    if not require_admin_name("เรียกเช็คชื่อ"):
         return
     sel = member_tree.selection()
     if not sel:
         messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเลือกพนักงานที่จะเช็คชื่อก่อน")
+        return
+    # แถว "📴 หลุด" ไม่มีเครื่องให้ส่งเสียงไปหา — ข้ามไป (กลับเข้าห้องเมื่อไหร่ป๊อปอัพขึ้นเอง)
+    sel = [s for s in sel if not str(s).startswith("orphan:")]
+    if not sel:
+        messagebox.showwarning("⚠️ แจ้งเตือน", "คนที่เลือกหลุดการเชื่อมต่ออยู่ — เรียกไม่ได้\n"
+                                             "กลับเข้าห้องเมื่อไหร่ ป๊อปอัพจะขึ้นเองและนับเวลาต่อ")
         return
     # ✅ แอดมินไม่มีเสียง เฉพาะพนักงานเท่านั้นที่ได้ยินเสียงแจ้ง
     for sid in sel:
         # ✅ ส่ง data dict พร้อม target_sid และ checker_name (ชื่อแอดมิน)
         sio.emit("check_member", {"target_sid": sid, "checker_name": state.get("admin_name", "")})
     set_status("🔔 ส่งเช็คชื่อแล้ว — รอพนักงานกดยืนยัน", C["amber"])
+
+
+def cancel_selected():
+    """ยกเลิกการเรียกที่ยังรอยืนยัน — กดเรียกผิดคน / คนนั้นไปเข้าห้องน้ำหรือกินข้าวอยู่
+    ไม่นับว่าไม่ตอบ และป๊อปอัพที่เครื่องพนักงานจะปิดเอง"""
+    if not require_connection():
+        return
+    if not require_admin_name("ยกเลิกการเรียก"):
+        return
+    if not state.get("call_timeout"):
+        messagebox.showwarning("⚠️ แจ้งเตือน", "เซิร์ฟเวอร์ยังเป็นรุ่นเก่า — ยังยกเลิกการเรียกไม่ได้\n"
+                                             "รอสักครู่ให้เซิร์ฟเวอร์อัพเดทก่อน")
+        return
+    sel = member_tree.selection()
+    if not sel:
+        messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเลือกพนักงานที่จะยกเลิกการเรียกก่อน")
+        return
+    data = state.get("members_cache") or {}
+    rows = {m["sid"]: m for m in (data.get("members") or []) + (data.get("offline") or [])}
+    # ยกเลิกได้: กำลังรอยืนยัน / หลุดไประหว่างรอ / ขึ้นไม่ตอบไปแล้ว (การเรียกล่าสุด)
+    targets = [rows[s] for s in sel if s in rows
+               and (rows[s].get("status") in ("pending", "offline")
+                    or (rows[s].get("status") == "no_response" and rows[s].get("call")))]
+    if not targets:
+        messagebox.showwarning("⚠️ แจ้งเตือน",
+                               "คนที่เลือกไม่มีการเรียกให้ยกเลิก\n"
+                               "ยกเลิกได้เฉพาะคนที่ขึ้นว่า 🔔 รอยืนยัน / 📴 หลุด / ⌛ ไม่ตอบ")
+        return
+    names = "\n".join(f"• {m['name']}" for m in targets)
+    if not messagebox.askyesno("✖ ยกเลิกการเรียก",
+                               f"ต้องการยกเลิกการเรียกเช็คชื่อของ\n{names}\nใช่หรือไม่?\n\n"
+                               "(ครั้งนี้จะไม่ถูกบันทึกว่าไม่ตอบ และป๊อปอัพที่เครื่องพนักงานจะปิดเอง)"):
+        return
+    for m in targets:
+        _send_cancel(m["sid"], m["name"], m.get("call"))
+
+
+def _send_cancel(sid, name, call=None):
+    # รอคำตอบจากเซิร์ฟเวอร์ — ถ้าเงียบ แปลว่าเน็ตสะดุด
+    done = {"ack": False}
+
+    def on_ack(*args):
+        done["ack"] = True
+        res = args[0] if args and isinstance(args[0], dict) else {}
+
+        def _apply():
+            if res.get("ok"):
+                set_status(f"✖ ยกเลิกการเรียก {res.get('name') or name} แล้ว — ไม่นับว่าไม่ตอบ",
+                           C["green"])
+            else:
+                messagebox.showwarning("⚠️ ยกเลิกไม่สำเร็จ", res.get("msg") or "ยกเลิกไม่สำเร็จ")
+        root.after(0, _apply)
+
+    def on_timeout():
+        if not done["ack"]:
+            set_status(f"⚠️ ยกเลิกการเรียก {name} ไม่สำเร็จ — ติดต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง",
+                       C["red"])
+
+    try:
+        sio.emit("cancel_check", {"target_sid": sid, "checker_name": state.get("admin_name", ""),
+                                  "call": call},
+                 callback=on_ack)
+        root.after(8000, on_timeout)
+    except Exception:
+        messagebox.showwarning("⚠️ ส่งไม่สำเร็จ", "การเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง")
 
 
 def force_rescan():
@@ -864,8 +959,29 @@ def on_all_stats(data):
 def open_history():
     if not require_connection():
         return
+    # ไม่ส่งอะไรไปด้วย — เซิร์ฟเวอร์รุ่นเก่ารับ get_history แบบไม่มีข้อมูลเท่านั้น
+    # (เซิร์ฟเวอร์รุ่นใหม่ดูเวอร์ชันจาก set_identity เองว่าจะส่งรายการ "ยกเลิก" มาให้ไหม)
     sio.emit("get_history")
     set_status("📜 กำลังโหลดประวัติ...", C["muted"])
+
+
+# ผลของการเรียกแต่ละครั้งในประวัติ — (ข้อความในตาราง, สี)
+RESULT_TH = {"checked": ("✅ เข้างานแล้ว", "green"), "no_response": ("⌛ ไม่ตอบ", "amber"),
+             "cancelled": ("🚫 ยกเลิก", "muted")}
+
+
+def _result_csv(r):
+    result = r.get("result")
+    if result == "checked":
+        return "เข้างานแล้ว"
+    if result == "cancelled":
+        why = [f"โดย {r['cancelled_by']}"] if r.get("cancelled_by") else []
+        if r.get("cancelled_at"):
+            why.append(f"เวลา {r['cancelled_at']}")
+        if r.get("note"):
+            why.append(r["note"])
+        return "ยกเลิก" + (f" ({', '.join(why)})" if why else "")
+    return "ไม่ตอบ"
 
 
 def show_history_window(payload):
@@ -873,7 +989,7 @@ def show_history_window(payload):
     days = payload.get("days", 2)
     win = tk.Toplevel(root)
     win.title(f"📜 ประวัติการเช็คชื่อ (ย้อนหลัง {days} วัน)")
-    win.geometry("940x560")
+    win.geometry("1000x560")
     win.configure(bg=C["bg"])
     try:
         if _icon is not None:
@@ -892,21 +1008,26 @@ def show_history_window(payload):
              "checker": "🛡️ ผู้เรียก", "called": "🔔 กดเรียก", "confirmed": "✅ ยืนยัน",
              "elapsed": "⏱️ ใช้เวลา", "result": "📊 ผล"}
     widths = {"date": 100, "room": 120, "name": 145, "checker": 120, "called": 90,
-              "confirmed": 90, "elapsed": 85, "result": 115}
+              "confirmed": 90, "elapsed": 85, "result": 175}
     for c in cols:
         tree.heading(c, text=heads[c])
         tree.column(c, width=widths[c], anchor="center" if c != "name" else "w")
     tree.column("room", anchor="w")
     tree.tag_configure("green", foreground=C["green"])
     tree.tag_configure("amber", foreground=C["amber"])
+    tree.tag_configure("muted", foreground=C["muted"])
     vs = ttk.Scrollbar(table_wrap, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=vs.set)
     vs.pack(side="right", fill="y")
     tree.pack(side="left", fill="both", expand=True)
 
-    result_th = {"checked": ("✅ เข้างานแล้ว", "green"), "no_response": ("⌛ ไม่ตอบ", "amber")}
     for r in records:
-        label, tag = result_th.get(r.get("result"), (r.get("result", ""), "amber"))
+        label, tag = RESULT_TH.get(r.get("result"), (r.get("result", ""), "amber"))
+        if r.get("result") == "cancelled":  # บอกว่าใครกดยกเลิก — อาจไม่ใช่คนเดียวกับผู้เรียก
+            if r.get("cancelled_by"):
+                label = f"🚫 ยกเลิกโดย {r['cancelled_by']}"
+            elif r.get("note"):
+                label = f"🚫 ยกเลิก ({r['note']})"
         tree.insert("", "end", tags=(tag,), values=(
             r.get("date", ""), r.get("room", ""), r.get("name", ""),
             r.get("checker", "") or "—",
@@ -940,10 +1061,9 @@ def export_history_zip(records):
             w = csv.writer(f)
             w.writerow(["วันที่", "ห้อง", "ชื่อ", "ผู้เรียก", "เวลากดเรียก", "เวลายืนยัน", "ใช้เวลา(วินาที)", "ผล"])
             for r in records:
-                res = "เข้างานแล้ว" if r.get("result") == "checked" else "ไม่ตอบ"
                 w.writerow([r.get("date", ""), r.get("room", ""), r.get("name", ""),
                             r.get("checker", ""), r.get("called", ""), r.get("confirmed", ""),
-                            r.get("elapsed", ""), res])
+                            r.get("elapsed", ""), _result_csv(r)])
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(tmp_csv, csv_name)
         messagebox.showinfo("✅ บันทึกสำเร็จ", f"บันทึกประวัติแล้วที่:\n{path}")
@@ -1093,13 +1213,19 @@ def render_members(data):
     state["members_cache"] = data  # เก็บไว้วาดใหม่ตอนข้อมูลสถานะอัปเดต
     selected = set(member_tree.selection())
     member_tree.delete(*member_tree.get_children())
-    for m in data["members"]:
-        label, tag = STATUS_TH.get(m["status"], (m["status"], "muted"))
-        elapsed = f"{m['elapsed']} วิ" if m.get("elapsed") else "—"
+    for m in data["members"] + (data.get("offline") or []):
+        if m.get("offline"):
+            label, tag = _pending_label(m), "muted"
+            elapsed = "—"
+        else:
+            label, tag = STATUS_TH.get(m["status"], (m["status"], "muted"))
+            if m["status"] == "pending" and m.get("deadline"):
+                label = _pending_label(m)
+            elapsed = f"{m['elapsed']} วิ" if m.get("elapsed") else "—"
         dots_img, rounds_txt, act_txt, over, today_txt = _status_cells(m["name"])
         member_tree.insert("", "end", iid=m["sid"],
                            text=rounds_txt, image=dots_img or "",
-                           values=(m["name"], label, m["time"] or "—", elapsed, act_txt, today_txt),
+                           values=(m["name"], label, m.get("time") or "—", elapsed, act_txt, today_txt),
                            tags=("over",) if over else (tag,))
         if m["sid"] in selected:
             member_tree.selection_add(m["sid"])
@@ -1111,9 +1237,46 @@ def on_rooms(data):
     root.after(0, render_rooms, data)
 
 
+def _pending_label(m):
+    # นับถอยหลังเวลาที่เหลือก่อนจะนับว่าไม่ตอบ — ครบแล้วเซิร์ฟเวอร์เปลี่ยนเป็น "ไม่ตอบ" เอง
+    left = max(0, math.ceil(m["deadline"] - time.monotonic()))
+    if m.get("offline"):  # หลุดไประหว่างถูกเรียก — ยังนับเวลาอยู่ กลับเข้าห้องทันก็ยืนยันได้
+        return f"📴 หลุด {left // 60}:{left % 60:02d}"
+    return f"🔔 รอยืนยัน {left // 60}:{left % 60:02d}"
+
+
+def _tick_countdown():
+    # อัปเดตเฉพาะช่องสถานะของคนที่รอยืนยัน ทุกวินาที — ไม่วาดตารางใหม่ทั้งหมด (แถวที่เลือกไว้ไม่หลุด)
+    try:
+        if state["room"]:
+            data = state.get("members_cache") or {}
+            for m in (data.get("members") or []) + (data.get("offline") or []):
+                if (m.get("status") == "pending" or m.get("offline")) and m.get("deadline") \
+                        and member_tree.exists(m["sid"]):
+                    member_tree.set(m["sid"], "status", _pending_label(m))
+    finally:
+        root.after(1000, _tick_countdown)
+
+
 @sio.on("room_state")
 def on_room_state(data):
-    root.after(0, render_members, data)
+    # เซิร์ฟเวอร์บอก "เหลือกี่วินาที" มา — แปลงเป็นเวลาสิ้นสุดบนนาฬิกาเครื่องนี้ทันทีที่ได้รับ
+    # (ข้อมูลชุดนี้ถูกเก็บไว้วาดซ้ำตอนสถานะอัปเดต ถ้าเก็บเป็นวินาทีที่เหลือ ตัวนับจะเด้งกลับ)
+    now = time.monotonic()
+    for m in data.get("members") or []:
+        if m.get("missed"):  # เซิร์ฟเวอร์ส่ง "wait" ไว้ให้โปรแกรมรุ่นเก่า — รุ่นนี้แสดงว่าไม่ตอบ
+            m["status"] = "no_response"
+        if m.get("left") is not None:
+            m["deadline"] = now + m["left"]
+    for m in data.get("offline") or []:
+        m.update(offline=True, status="offline", deadline=now + (m.get("left") or 0))
+
+    def _apply():
+        # เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง call_timeout มา = ยังไม่รู้จักการยกเลิก / กติกา 10 นาที
+        state["call_timeout"] = data.get("call_timeout")
+        room_hint.config(text=_room_hint_text(state["call_timeout"]))
+        render_members(data)
+    root.after(0, _apply)
 
 
 @sio.on("joined_room")
@@ -1252,6 +1415,7 @@ def reconnect_watchdog():
 
 init_sound()
 show_lobby()
+_tick_countdown()
 threading.Thread(target=connect_worker, daemon=True).start()
 root.after(60, refit)  # จัดขนาดหน้าต่างให้พอดีเนื้อหาหลัง widget วางตัวเสร็จ
 # 🔄 อัพเดทอัตโนมัติ — เช็คเงียบๆ ตอนเปิด ถ้ามีเวอร์ชันใหม่ก็โหลดและเปิดใหม่ให้เอง

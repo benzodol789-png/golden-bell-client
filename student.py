@@ -396,6 +396,7 @@ STATUS_TH = {
     "wait": "⏳ ยังไม่เช็คชื่อ",
     "pending": "🔔 รอยืนยัน...",
     "checked": "✅ เข้างานแล้ว",
+    "no_response": "⌛ ไม่ตอบ",  # เรียกครบ 10 นาทีแล้วไม่กดยืนยัน
 }
 
 # ========== หน้าต่างหลัก ==========
@@ -1110,6 +1111,8 @@ def on_my_stats(data):
 # ========== popup เช็คชื่อ — สั่นเรียกความสนใจ + มีเสียง ==========
 def close_popup():
     stop_alert()  # ✅ หยุดเสียงแจ้งทันทีเมื่อปิด popup
+    # ป๊อปอัพหายไปแล้ว คำตอบของการกดยืนยันที่ค้างอยู่ (ถ้ามี) ไม่ต้องรอแล้ว — กันปุ่มยืนยันของป๊อปอัพใหม่กดไม่ติด
+    state["confirm_waiting"] = False
     popup = state["popup"]
     state["popup"] = None
     if popup is not None:
@@ -1172,7 +1175,7 @@ def open_check_popup():
         try:
             state["confirm_waiting"] = True
             sio.emit("confirm_checkin", callback=on_ack)
-            popup.after(8000, on_timeout)
+            root.after(8000, on_timeout)  # ผูกกับหน้าต่างหลัก — ป๊อปอัพถูกปิดไปก่อน ตัวจับเวลาก็ยังทำงาน
         except Exception:
             state["confirm_waiting"] = False
             messagebox.showwarning("⚠️ ส่งไม่สำเร็จ",
@@ -1236,7 +1239,8 @@ def join_selected():
         messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเลือกห้องจากตารางก่อน")
         return
     state["name"] = name
-    sio.emit("join_room_member", {"room": room_tree.item(sel[0], "values")[0], "name": name})
+    sio.emit("join_room_member", {"room": room_tree.item(sel[0], "values")[0], "name": name,
+                                  "version": updater.APP_VERSION})
 
 
 def leave_room():
@@ -1349,6 +1353,9 @@ def on_rooms(data):
 
 @sio.on("room_state")
 def on_room_state(data):
+    for m in (data or {}).get("members") or []:
+        if m.get("missed"):  # เซิร์ฟเวอร์ส่ง "wait" ไว้ให้โปรแกรมรุ่นเก่า — รุ่นนี้แสดงว่าไม่ตอบ
+            m["status"] = "no_response"
     root.after(0, render_members, data)
 
 
@@ -1360,6 +1367,8 @@ def on_joined(data):
         show_room(data["room"])
         set_status(f"✅ เข้าห้อง {data['room']} แล้ว — รอแอดมินเรียกเช็คชื่อ")
         save_name(state["name"])  # ✅ จำชื่อไว้สำหรับครั้งต่อไป
+        if data.get("pending"):  # หลุดไปตอนถูกเรียก แล้วต่อกลับมาทันเวลา — เปิดป๊อปอัพให้กดยืนยันต่อ
+            open_check_popup()
     root.after(0, _apply)
 
 
@@ -1375,7 +1384,66 @@ def on_left(_):
 
 @sio.on("check_request")
 def on_check_request(_):
-    root.after(0, open_check_popup)
+    def _apply():
+        close_missed_notice()  # ถูกเรียกใหม่แล้ว ป้าย "พลาดการเรียก" ครั้งก่อนไม่ต้องค้างไว้
+        open_check_popup()
+    root.after(0, _apply)
+
+
+@sio.on("check_closed")
+def on_check_closed(data=None):
+    """การเรียกจบโดยไม่ได้กดยืนยัน — แอดมินยกเลิก หรือครบเวลาแล้ว (บันทึกว่าไม่ตอบ)
+    เก็บป๊อปอัพและหยุดเสียงเรียก ไม่ให้ดังค้างทั้งที่ไม่มีการเรียกแล้ว"""
+    data = data if isinstance(data, dict) else {}
+
+    def _apply():
+        close_popup()
+        close_missed_notice()
+        if data.get("reason") == "cancelled":
+            set_status("ℹ️ แอดมินยกเลิกการเรียกเช็คชื่อแล้ว — ไม่ต้องกดยืนยัน", C["muted"])
+        elif data.get("reason") == "expired":
+            secs = int(data.get("timeout") or 600)
+            limit = f"{secs // 60} นาที" if secs % 60 == 0 else f"{secs} วินาที"
+            called = f"แอดมินเรียกเมื่อ {data['called']} แต่" if data.get("called") else ""
+            msg = f"{called}ไม่ได้กดยืนยันภายใน {limit} — ระบบบันทึกว่าไม่ตอบ"
+            set_status(f"⌛ {msg}", C["amber"])
+            show_missed_notice(msg)
+    root.after(0, _apply)
+
+
+def close_missed_notice():
+    win = state.get("missed_win")
+    state["missed_win"] = None
+    if win is not None:
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+
+
+def show_missed_notice(msg):
+    """ป้ายเงียบๆ ค้างไว้บนจอ (ไม่มีเสียง ไม่สั่น) — กลับมาที่โต๊ะแล้วจะได้รู้ว่าพลาดการเรียกไป
+    ป๊อปอัพเรียกปิดไปแล้วตอนครบเวลา ถ้าไม่มีป้ายนี้จะไม่รู้เลยว่าถูกเรียก"""
+    close_missed_notice()
+    win = tk.Toplevel(root)
+    state["missed_win"] = win
+    win.title("⌛ พลาดการเรียกเช็คชื่อ")
+    win.configure(bg=C["bg"], highlightbackground=C["amber"], highlightthickness=3)
+    win.attributes("-topmost", True)
+    win.resizable(False, False)
+    win.protocol("WM_DELETE_WINDOW", close_missed_notice)
+    w, h = 460, 290
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    win.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+    tk.Label(win, text="⌛", font=("Segoe UI Emoji", 36), bg=C["bg"],
+             fg=C["amber"]).pack(pady=(18, 0))
+    tk.Label(win, text="พลาดการเรียกเช็คชื่อ", font=("Segoe UI", 18, "bold"),
+             bg=C["bg"], fg=C["amber"]).pack(pady=(2, 4))
+    tk.Label(win, text=msg, font=F_NORMAL, bg=C["bg"], fg=C["text"],
+             wraplength=w - 40, justify="center").pack(padx=20)
+    GoldButton(win, "รับทราบ", w=180, h=46, kind="gold",
+               command=close_missed_notice, bg=C["bg"]).pack(pady=14)
 
 
 @sio.on("config_data")
@@ -1431,7 +1499,8 @@ def connect():
     # ✅ เน็ตสะดุดแล้วต่อกลับมา — เข้าห้องเดิมคืนอัตโนมัติ (เซิร์ฟเวอร์ล้างสถานะตอนหลุด)
     if state["room"] and state["name"]:
         try:
-            sio.emit("join_room_member", {"room": state["room"], "name": state["name"]})
+            sio.emit("join_room_member", {"room": state["room"], "name": state["name"],
+                                          "version": updater.APP_VERSION})
         except Exception:
             pass
 
