@@ -242,13 +242,24 @@ class RoundedCard(tk.Canvas):
         super().__init__(master, width=w, height=h, bg=bg or master["bg"],
                          highlightthickness=0, bd=0)
         fill = fill or C["card"]
-        self.create_polygon(round_points(4, 8, w - 2, h - 1, 18),
-                            smooth=True, fill=C["shadow"], outline="")
-        self.create_polygon(round_points(2, 2, w - 4, h - 5, 18),
-                            smooth=True, fill=fill, outline=C["gold"], width=1.5)
+        self.shadow = self.create_polygon(round_points(4, 8, w - 2, h - 1, 18),
+                                          smooth=True, fill=C["shadow"], outline="")
+        self.body = self.create_polygon(round_points(2, 2, w - 4, h - 5, 18),
+                                        smooth=True, fill=fill, outline=C["gold"], width=1.5)
         self.inner = tk.Frame(self, bg=fill)
-        self.create_window(w // 2, h // 2 - 1, window=self.inner,
-                           width=w - 44, height=h - 44)
+        self.win = self.create_window(w // 2, h // 2 - 1, window=self.inner,
+                                      width=w - 44, height=h - 44)
+        # วาดกรอบใหม่ตามขนาดจริง — การ์ดที่ pack แบบยืดได้จะขยาย/หดตามหน้าต่าง
+        self.bind("<Configure>", self._resize)
+
+    def _resize(self, e):
+        w, h = e.width, e.height
+        if w < 80 or h < 80:
+            return
+        self.coords(self.shadow, *round_points(4, 8, w - 2, h - 1, 18))
+        self.coords(self.body, *round_points(2, 2, w - 4, h - 5, 18))
+        self.coords(self.win, w // 2, h // 2 - 1)
+        self.itemconfigure(self.win, width=w - 44, height=h - 44)
 
 
 STATUS_TH = {
@@ -345,7 +356,8 @@ body = tk.Frame(root, bg=C["bg"])
 body.pack(fill="both", expand=True)
 
 status_label = tk.Label(root, text="", font=F_SMALL, bg=C["bg"], fg=C["muted"])
-status_label.pack(side="bottom", pady=(0, 6))
+# จองที่ก่อนเนื้อหา (before=body) — หดหน้าต่างลงแล้วตารางหดแทน แถบล่างไม่หาย
+status_label.pack(side="bottom", pady=(0, 6), before=body)
 
 
 def set_status(txt, color=None):
@@ -354,7 +366,7 @@ def set_status(txt, color=None):
 
 # ✅ แถบเวอร์ชัน + ปุ่มอัพเดทโปรแกรม (แถวล่างสุด)
 _update_bar = tk.Frame(root, bg=C["bg"])
-_update_bar.pack(side="bottom", pady=(0, 2))
+_update_bar.pack(side="bottom", pady=(0, 2), before=body)
 tk.Label(_update_bar, text=f"เวอร์ชัน {updater.APP_VERSION}", font=F_SMALL,
          bg=C["bg"], fg=C["muted"]).pack(side="left", padx=(0, 12))
 update_btn = tk.Button(_update_bar, text="🔄 อัพเดทโปรแกรม", font=F_SMALL,
@@ -421,16 +433,16 @@ style.map("Odol.Treeview.Heading", background=[("active", "#0A1228")])
 lobby = tk.Frame(body, bg=C["bg"])
 
 lobby_card = RoundedCard(lobby, 860, 350)
-lobby_card.pack(pady=(18, 6))
+lobby_card.pack(fill="both", expand=True, padx=24, pady=(18, 6))  # ยืด-หดตามหน้าต่าง
 tk.Label(lobby_card.inner, text="🏠 ห้องทั้งหมดในระบบ", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 8))
 
 room_tree = ttk.Treeview(lobby_card.inner, columns=("name", "members", "admins"),
                          show="headings", height=6, style="Odol.Treeview")
-room_tree.column("name", width=430)
-room_tree.column("members", width=170, anchor="center")
-room_tree.column("admins", width=170, anchor="center")
+room_tree.column("members", anchor="center")
+room_tree.column("admins", anchor="center")
 room_tree.pack(fill="both", expand=True)
+room_fit = theme.FitTable(room_tree, base_width=816)  # 816 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
 
 # ========== เรียงห้อง — คลิกที่หัวคอลัมน์เพื่อเรียง กดซ้ำเพื่อสลับขึ้น/ลง ==========
 # จำค่าที่เลือกไว้ เปิดโปรแกรมครั้งหน้าก็เรียงแบบเดิม
@@ -454,6 +466,7 @@ def _refresh_room_heads():
             arrow = "  ▼" if room_sort["desc"] else "  ▲"
         room_tree.heading(col, text=label + arrow,
                           command=(lambda c=col: sort_rooms_by(c)))
+    room_fit.refresh()  # หัวคอลัมน์ยาวขึ้น (มีลูกศร) — จัดความกว้างใหม่
 
 
 def sort_rooms_by(col):
@@ -524,6 +537,9 @@ ip_entry.bind("<KeyRelease>", lambda e: state.update(manual_ip=ip_entry.get().st
 GoldButton(net_row, "🔌 เชื่อมต่อ", w=130, h=34, kind="gold", font=F_SMALL,
            command=lambda: manual_connect(), bg=C["bg"]).pack(side="left")
 ip_entry.bind("<Return>", lambda e: manual_connect())
+# แถวใต้ตารางห้องจองที่ก่อน (ไล่จากล่างขึ้นบน) — ตารางห้องยืด/หดเก็บที่เหลือ
+for _w in (net_row, config_row, create_card, lobby_btns):
+    _w.pack_configure(side="bottom", before=lobby_card)
 
 # ========== หน้าในห้อง ==========
 room_view = tk.Frame(body, bg=C["bg"])
@@ -535,8 +551,8 @@ room_name_label.pack(side="left")
 room_info_label = tk.Label(room_head, text="", font=F_NORMAL, bg=C["bg"], fg=C["muted"])
 room_info_label.pack(side="left", padx=16, pady=(6, 0))
 
-member_card = RoundedCard(room_view, 980, 360)  # กว้างพอให้ทุกคอลัมน์แสดงครบไม่โดนตัด
-member_card.pack(pady=6)
+member_card = RoundedCard(room_view, 980, 360)
+member_card.pack(fill="both", expand=True, padx=24, pady=6)  # ยืด-หดตามหน้าต่าง
 member_tree = ttk.Treeview(member_card.inner,
                            columns=("name", "status", "time", "elapsed", "activity", "today"),
                            show="tree headings", height=7, style="Odol.Treeview")
@@ -548,22 +564,23 @@ member_tree.heading("time", text="🕐 เวลาเข้างาน")
 member_tree.heading("elapsed", text="⏱️ ใช้เวลา")
 member_tree.heading("activity", text="🏃 สถานะตอนนี้")
 member_tree.heading("today", text="📊 ออกไปกะนี้")     # รวมเวลาออกไปข้างนอกในรอบกะนี้
-# ความกว้างรวม 925 พอดีกับพื้นที่ในการ์ด (980 - ขอบ 44) — ไม่มีคอลัมน์ไหนโดนตัด
-member_tree.column("#0", width=140, minwidth=130, stretch=False, anchor="w")
-member_tree.column("name", width=195, stretch=False)
-member_tree.column("status", width=130, anchor="center", stretch=False)
-member_tree.column("time", width=95, anchor="center", stretch=False)
-member_tree.column("elapsed", width=85, anchor="center", stretch=False)
-member_tree.column("activity", width=170, anchor="w", stretch=False)
-member_tree.column("today", width=110, anchor="center")  # คอลัมน์สุดท้ายยืดเก็บที่ว่าง
+# ความกว้างคอลัมน์ + ขนาดตัวหนังสือ คำนวณจากข้อความจริงและความกว้างหน้าต่าง (FitTable)
+member_tree.column("#0", anchor="w")
+member_tree.column("status", anchor="center")
+member_tree.column("time", anchor="center")
+member_tree.column("elapsed", anchor="center")
+member_tree.column("activity", anchor="w")
+member_tree.column("today", anchor="center")
 member_tree.pack(fill="both", expand=True)
+member_fit = theme.FitTable(member_tree, base_width=936)  # 936 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 member_tree.tag_configure("muted", foreground=C["muted"])
 member_tree.tag_configure("amber", foreground=C["amber"])
 member_tree.tag_configure("green", foreground=C["green"])
 
 room_btns = tk.Frame(room_view, bg=C["bg"])
-room_btns.pack(pady=12)
+# ปุ่มกับคำแนะนำติดล่างเสมอ — หน้าต่างเตี้ยลง ตารางหดก่อน ปุ่มไม่หาย
+room_btns.pack(side="bottom", pady=12, before=member_card)
 GoldButton(room_btns, "🔔 เช็คชื่อคนที่เลือก", w=250, kind="gold",
            command=lambda: check_selected(), bg=C["bg"]).pack(side="left", padx=10)
 GoldButton(room_btns, "✖ ยกเลิกเรียก", w=190, kind="red",
@@ -586,7 +603,7 @@ def _room_hint_text(timeout=None):
 
 room_hint = tk.Label(room_view, text=_room_hint_text(), font=F_SMALL, bg=C["bg"],
                      fg=C["muted"], justify="center")
-room_hint.pack()
+room_hint.pack(side="bottom", before=room_btns)
 
 
 def refit():
@@ -861,20 +878,20 @@ def show_day_stats_window(payload):
     search_entry.pack(side="left")
 
     table_wrap = tk.Frame(win, bg=C["card_dark"])
-    table_wrap.pack(fill="both", expand=True, padx=16)
+    table_wrap.pack(fill="both", expand=True, padx=24)
     cols = ["name"] + [f"act{i}" for i in range(len(acts))] + ["total", "over"]
     tree = ttk.Treeview(table_wrap, columns=cols, show="headings", style="Odol.Treeview")
     tree.heading("name", text="👤 ชื่อ")
-    tree.column("name", width=230, anchor="w")
+    tree.column("name", anchor="w")
     for i, act in enumerate(acts):
         limit = limits.get(act)
         head = f"{act} ({int(limit) // 60} น.)" if limit else act
         tree.heading(f"act{i}", text=head)
-        tree.column(f"act{i}", width=165, anchor="center")
+        tree.column(f"act{i}", anchor="center")
     tree.heading("total", text="⏱️ รวม")
-    tree.column("total", width=165, anchor="center")
+    tree.column("total", anchor="center")
     tree.heading("over", text="⚠️ เกินเวลา")
-    tree.column("over", width=165, anchor="center")
+    tree.column("over", anchor="center")
     tree.tag_configure("over", foreground=C["red"])
     tree.tag_configure("out", foreground=C["amber"])
     vs = ttk.Scrollbar(table_wrap, orient="vertical", command=tree.yview)
@@ -906,7 +923,9 @@ def show_day_stats_window(payload):
             if cur:  # ยังไม่กลับที่นั่ง — บอกไว้ข้างชื่อเลย จะได้เห็นทันทีว่าใครยังออกอยู่
                 label[0] = f"{label[0]}  🚪 {cur.get('activity') or ''}"
             tree.insert("", "end", tags=(tag,) if tag else (), values=label)
+        fit.refresh()
 
+    fit = theme.FitTable(tree, base_width=975)  # 975 = ความกว้างตารางตอนเปิดหน้าต่างขนาดปกติ
     fill()
     search_entry.bind("<KeyRelease>", lambda e: fill(search_entry.get()))
 
@@ -989,7 +1008,7 @@ def show_history_window(payload):
     days = payload.get("days", 2)
     win = tk.Toplevel(root)
     win.title(f"📜 ประวัติการเช็คชื่อ (ย้อนหลัง {days} วัน)")
-    win.geometry("1000x560")
+    win.geometry("1100x600")
     win.configure(bg=C["bg"])
     try:
         if _icon is not None:
@@ -1001,18 +1020,15 @@ def show_history_window(payload):
              font=F_HEAD, bg=C["bg"], fg=C["gold_light"]).pack(pady=(14, 8))
 
     table_wrap = tk.Frame(win, bg=C["card_dark"])
-    table_wrap.pack(fill="both", expand=True, padx=16)
+    table_wrap.pack(fill="both", expand=True, padx=24)
     cols = ("date", "room", "name", "checker", "called", "confirmed", "elapsed", "result")
     tree = ttk.Treeview(table_wrap, columns=cols, show="headings", style="Odol.Treeview")
     heads = {"date": "📅 วันที่", "room": "🏷️ ห้อง", "name": "👤 ชื่อ",
              "checker": "🛡️ ผู้เรียก", "called": "🔔 กดเรียก", "confirmed": "✅ ยืนยัน",
              "elapsed": "⏱️ ใช้เวลา", "result": "📊 ผล"}
-    widths = {"date": 100, "room": 120, "name": 145, "checker": 120, "called": 90,
-              "confirmed": 90, "elapsed": 85, "result": 175}
     for c in cols:
         tree.heading(c, text=heads[c])
-        tree.column(c, width=widths[c], anchor="center" if c != "name" else "w")
-    tree.column("room", anchor="w")
+        tree.column(c, anchor="w" if c in ("room", "name") else "center")
     tree.tag_configure("green", foreground=C["green"])
     tree.tag_configure("amber", foreground=C["amber"])
     tree.tag_configure("muted", foreground=C["muted"])
@@ -1034,6 +1050,7 @@ def show_history_window(payload):
             r.get("called", ""), r.get("confirmed", "") or "—",
             f"{r['elapsed']} วิ" if r.get("elapsed") else "—", label,
         ))
+    theme.FitTable(tree, base_width=1035)  # 1035 = ความกว้างตารางตอนเปิดหน้าต่างขนาดปกติ
 
     btns = tk.Frame(win, bg=C["bg"])
     btns.pack(pady=12)
@@ -1092,6 +1109,7 @@ def render_rooms(rooms):
         iid = room_tree.insert("", "end", values=(r["name"], r["members"], r["admins"]))
         if r["name"] == keep:
             room_tree.selection_set(iid)
+    room_fit.refresh()
 
 
 # ========== 🔗 ข้อมูลจากระบบ check-status (เซิร์ฟเวอร์ส่งมาให้สดๆ) ==========
@@ -1099,6 +1117,9 @@ def render_rooms(rooms):
 ROUND_COLOR = {"green": "#4ADE80",   # เช็คแล้ว
                "red": "#F87171",     # ประกาศรอบแล้วแต่ยังไม่เช็ค
                "gray": "#4A4463",    # ยังไม่ประกาศรอบนี้
+               # ประกาศแล้วแต่ไม่รู้ว่าเช็คหรือยัง — กะดึกหลังเที่ยงคืนที่ check-status ส่งมาเป็นวันหยุดผิดๆ
+               # (เซิร์ฟเวอร์เปลี่ยนให้เป็นรอบ 1 แดง + รอบที่เหลือ unknown)
+               "unknown": "#8A84A3",
                "offshift": "#3A3550",
                "holiday": "#FBBF24",
                "dayoff": "#FBBF24"}
@@ -1229,6 +1250,7 @@ def render_members(data):
                            tags=("over",) if over else (tag,))
         if m["sid"] in selected:
             member_tree.selection_add(m["sid"])
+    member_fit.refresh()
 
 
 # ========== เหตุการณ์จากเซิร์ฟเวอร์ ==========

@@ -383,13 +383,24 @@ class RoundedCard(tk.Canvas):
         super().__init__(master, width=w, height=h, bg=bg or master["bg"],
                          highlightthickness=0, bd=0)
         fill = fill or C["card"]
-        self.create_polygon(round_points(4, 8, w - 2, h - 1, 18),
-                            smooth=True, fill=C["shadow"], outline="")
-        self.create_polygon(round_points(2, 2, w - 4, h - 5, 18),
-                            smooth=True, fill=fill, outline=C["gold"], width=1.5)
+        self.shadow = self.create_polygon(round_points(4, 8, w - 2, h - 1, 18),
+                                          smooth=True, fill=C["shadow"], outline="")
+        self.body = self.create_polygon(round_points(2, 2, w - 4, h - 5, 18),
+                                        smooth=True, fill=fill, outline=C["gold"], width=1.5)
         self.inner = tk.Frame(self, bg=fill)
-        self.create_window(w // 2, h // 2 - 1, window=self.inner,
-                           width=w - 40, height=h - 40)
+        self.win = self.create_window(w // 2, h // 2 - 1, window=self.inner,
+                                      width=w - 40, height=h - 40)
+        # วาดกรอบใหม่ตามขนาดจริง — การ์ดที่ pack แบบยืดได้จะขยาย/หดตามหน้าต่าง
+        self.bind("<Configure>", self._resize)
+
+    def _resize(self, e):
+        w, h = e.width, e.height
+        if w < 80 or h < 80:
+            return
+        self.coords(self.shadow, *round_points(4, 8, w - 2, h - 1, 18))
+        self.coords(self.body, *round_points(2, 2, w - 4, h - 5, 18))
+        self.coords(self.win, w // 2, h // 2 - 1)
+        self.itemconfigure(self.win, width=w - 40, height=h - 40)
 
 
 STATUS_TH = {
@@ -443,11 +454,12 @@ body = tk.Frame(root, bg=C["bg"])
 body.pack(fill="both", expand=True)
 
 status_label = tk.Label(root, text="", font=F_SMALL, bg=C["bg"], fg=C["muted"])
-status_label.pack(side="bottom", pady=(0, 6))
+# จองที่ก่อนเนื้อหา (before=body) — หดหน้าต่างลงแล้วตารางหดแทน แถบล่างไม่หาย
+status_label.pack(side="bottom", pady=(0, 6), before=body)
 
 # ✅ แถบเวอร์ชัน + ปุ่มอัพเดทโปรแกรม (แถวล่างสุด)
 _update_bar = tk.Frame(root, bg=C["bg"])
-_update_bar.pack(side="bottom", pady=(0, 2))
+_update_bar.pack(side="bottom", pady=(0, 2), before=body)
 tk.Label(_update_bar, text=f"เวอร์ชัน {updater.APP_VERSION}", font=F_SMALL,
          bg=C["bg"], fg=C["muted"]).pack(side="left", padx=(0, 12))
 update_btn = tk.Button(_update_bar, text="🔄 อัพเดทโปรแกรม", font=F_SMALL,
@@ -487,7 +499,7 @@ theme_btn.config(text=_theme_label())
 
 # ✅ แถบปรับระดับเสียงเรียกเช็คชื่อ — กด −/+ หรือลากแถบก็ได้ จำค่าไว้ให้เอง
 _vol_bar = tk.Frame(root, bg=C["bg"])
-_vol_bar.pack(side="bottom", pady=(0, 2))
+_vol_bar.pack(side="bottom", pady=(0, 2), before=body)
 
 
 def _vol_icon(v):
@@ -587,16 +599,16 @@ name_entry.bind("<FocusOut>", _announce_identity)
 name_entry.bind("<Return>", _announce_identity)
 
 rooms_card = RoundedCard(lobby, 560, 280)
-rooms_card.pack(pady=6)
+rooms_card.pack(fill="both", expand=True, padx=20, pady=6)  # ยืด-หดตามหน้าต่าง
 tk.Label(rooms_card.inner, text="🏠 เลือกห้องที่จะเข้า", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 6))
 room_tree = ttk.Treeview(rooms_card.inner, columns=("name", "members"),
                          show="headings", height=5, style="Odol.Treeview")
 room_tree.heading("name", text="🏷️ ชื่อห้อง")
 room_tree.heading("members", text="👥 พนักงานในห้อง")
-room_tree.column("name", width=320)
-room_tree.column("members", width=170, anchor="center")
+room_tree.column("members", anchor="center")
 room_tree.pack(fill="both", expand=True)
+room_fit = theme.FitTable(room_tree, base_width=520)  # 520 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
 
 join_btns = tk.Frame(lobby, bg=C["bg"])
 join_btns.pack(pady=8)
@@ -618,6 +630,9 @@ ip_entry.bind("<KeyRelease>", lambda e: state.update(manual_ip=ip_entry.get().st
 GoldButton(net_row, "🔌 เชื่อมต่อ", w=120, h=34, kind="gold", font=F_SMALL,
            command=lambda: manual_connect(), bg=C["bg"]).pack(side="left")
 ip_entry.bind("<Return>", lambda e: manual_connect())
+# แถวใต้ตารางห้องจองที่ก่อน (ไล่จากล่างขึ้นบน) — ตารางห้องยืด/หดเก็บที่เหลือ
+for _w in (net_row, join_btns):
+    _w.pack_configure(side="bottom", before=rooms_card)
 
 # ========== หน้าในห้อง ==========
 room_view = tk.Frame(body, bg=C["bg"])
@@ -627,7 +642,7 @@ me_label = tk.Label(room_view, text="", font=F_NORMAL, bg=C["bg"], fg=C["muted"]
 me_label.pack()
 
 member_card = RoundedCard(room_view, 640, 300)  # กว้างกว่าการ์ดอื่น — ตารางนี้มี 4 คอลัมน์
-member_card.pack(pady=8)
+member_card.pack(fill="both", expand=True, padx=20, pady=8)  # ยืด-หดตามหน้าต่าง
 tk.Label(member_card.inner, text="👥 พนักงานในห้องนี้", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 6))
 member_tree = ttk.Treeview(member_card.inner, columns=("name", "status", "activity", "today"),
@@ -636,24 +651,24 @@ member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("activity", text="🏃 ตอนนี้")
 member_tree.heading("today", text="📊 ออกไปกะนี้")  # รวมเวลาออกไปข้างนอกในรอบกะนี้
-# รวม 600 = พอดีพื้นที่ในการ์ด — กว้างพอข้อความยาวสุดที่เกิดได้จริง (วัดแล้ว):
-# ชื่อเต็ม "ODOL-NOODLES-769PG" 186px / "🚻 ปวดหนัก · 1 ชม. 59 น." 176px — เดิมหัวคอลัมน์ขวาสุดโดนตัด
-member_tree.column("name", width=190)
-member_tree.column("status", width=115, anchor="center")
-member_tree.column("activity", width=180, anchor="center")
-member_tree.column("today", width=115, anchor="center")
+# ความกว้างคอลัมน์ + ขนาดตัวหนังสือ คำนวณจากข้อความจริงและความกว้างหน้าต่าง (FitTable)
+member_tree.column("status", anchor="center")
+member_tree.column("activity", anchor="center")
+member_tree.column("today", anchor="center")
 member_tree.pack(fill="both", expand=True)
+member_fit = theme.FitTable(member_tree, base_width=600)  # 600 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
 member_tree.tag_configure("me", foreground=C["gold_light"])
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 
 room_btns = tk.Frame(room_view, bg=C["bg"])
-room_btns.pack(pady=10)
+# ปุ่มกับคำแนะนำติดล่างเสมอ — หน้าต่างเตี้ยลง ตารางหดก่อน ปุ่มไม่หาย
+room_btns.pack(side="bottom", pady=10, before=member_card)
 GoldButton(room_btns, "🚪 ออกจากห้อง / ย้ายห้อง", w=250, kind="dark",
            command=lambda: leave_room(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(room_btns, "📊 สถิติของฉัน", w=180, kind="gold",
            command=lambda: request_my_stats(), bg=C["bg"]).pack(side="left", padx=6)
 tk.Label(room_view, text="🔔 เมื่อแอดมินเรียกเช็คชื่อ จะมีเสียงและหน้าต่างเด้งขึ้นมา",
-         font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack()
+         font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(side="bottom", before=room_btns)
 
 
 def refit():
@@ -1298,6 +1313,7 @@ def render_rooms(rooms):
         iid = room_tree.insert("", "end", values=(r["name"], f"{r['members']} คน"))
         if r["name"] == keep:
             room_tree.selection_set(iid)
+    room_fit.refresh()
 
 
 # ข้อมูลจากระบบ check-status ที่เซิร์ฟเวอร์ส่งมาให้ทั้งห้อง (ใครออกไปทำอะไร ใช้เวลาไปเท่าไหร่แล้วในกะนี้)
@@ -1330,6 +1346,7 @@ def render_members(data):
         member_tree.insert("", "end", tags=tags,
                            values=(m["name"], STATUS_TH.get(m["status"], m["status"]),
                                    act_txt, today_txt))
+    member_fit.refresh()
 
 
 @sio.on("members_status")
