@@ -21,10 +21,23 @@ import time
 
 import requests
 
-APP_VERSION = "3.4.1"
+APP_VERSION = "3.5.0"
 GITHUB_REPO = "benzodol789-png/golden-bell-client"
 API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "golden-bell-updater"}
+
+# งานที่โปรแกรมฝากไว้ตอนรีสตาร์ทหลังอัพเดท (ไม่ตั้งก็ทำงานแบบเดิม)
+before_restart = []   # เรียกก่อนเปิดตัวใหม่ — เช่น ปล่อยตัวล็อกกันเปิดซ้อน เก็บไอคอนถาด
+restart_failed = []   # เรียกเมื่อตัวใหม่เปิดไม่ติดแล้วสลับกลับเป็นตัวเดิม — เอาของที่ปล่อยไปคืนมา
+restart_args = None   # ฟังก์ชันคืน list อาร์กิวเมนต์ของตัวใหม่ — เช่น ["--tray"] ให้เปิดแบบซ่อนต่อ
+
+
+def _run_hooks(hooks):
+    for fn in hooks:
+        try:
+            fn()
+        except Exception:
+            pass  # งานเสริม พังก็ต้องไม่ขวางการอัพเดท
 
 
 class UpdateError(Exception):
@@ -171,11 +184,21 @@ def apply_and_restart(new_path):
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     for k in [k for k in env if k.startswith("_PYI_") or k == "_MEIPASS2"]:
         del env[k]
-    p = subprocess.Popen([exe], cwd=os.path.dirname(exe) or None, env=env, close_fds=True)
+    try:
+        args = list(restart_args() or []) if restart_args else []
+    except Exception:
+        args = []
+    _run_hooks(before_restart)
+    try:
+        p = subprocess.Popen([exe, *args], cwd=os.path.dirname(exe) or None, env=env, close_fds=True)
+    except OSError:
+        _run_hooks(restart_failed)
+        raise
     time.sleep(1.5)  # รอดูว่า bootloader ของตัวใหม่ไม่ตายทันที
     if p.poll() is not None:
         _retry(os.rename, exe, new_path)  # ตัวใหม่เปิดไม่ติด — สลับตัวเดิมกลับมา
         _retry(os.rename, old, exe)
+        _run_hooks(restart_failed)
         raise UpdateError("เวอร์ชันใหม่เปิดไม่ติด — ระบบสลับกลับเป็นเวอร์ชันเดิมให้แล้ว\n"
                           "(อาจถูก antivirus บล็อก — แจ้งผู้ดูแลระบบ)")
     os._exit(0)

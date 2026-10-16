@@ -14,11 +14,25 @@ import socketio
 
 import prefs    # 💾 เก็บค่าตั้งค่าของผู้ใช้ (ระดับเสียง)
 import theme    # 🎨 ระบบธีม มืด/สว่าง
+import tray     # 🖥️ ไอคอนถาด + เปิดเองตอนเปิดเครื่อง + กันเปิดซ้อน
 import updater  # 🔄 ระบบอัพเดทโปรแกรมจาก GitHub Releases
 
 updater.cleanup_old()  # ลบไฟล์ .old ที่ค้างจากการอัพเดทรอบก่อน
 
 APP_NAME = "กระดิ่งทอง มรณะ"
+
+# 🖥️ เปิดแบบซ่อนไว้ที่ถาดไอคอน — Windows เปิดให้เองตอนเปิดเครื่อง (และตอนรีสตาร์ทหลังอัพเดทขณะซ่อนอยู่)
+START_HIDDEN = "--tray" in sys.argv[1:]
+
+# 🔒 เปิดได้ทีละตัว — กดเปิดซ้ำ = เรียกหน้าต่างของตัวที่เปิดอยู่ขึ้นมาแทน ไม่มีสองตัวรับการเรียกซ้อนกัน
+#    (รันจาก source ใช้คนละชื่อ ไม่ชนกับตัว .exe ที่เปิดใช้งานจริงอยู่ในเครื่องเดียวกัน)
+_instance = tray.SingleInstance("GoldenBell.Employee" + ("" if getattr(sys, "frozen", False) else ".dev"))
+if not os.environ.get("ODOL_MULTI") and not _instance.acquire():
+    if not START_HIDDEN:
+        _instance.signal_existing()
+    # ตัวเดิมอาจกำลังปิดอยู่ (เพิ่งกดออกจากโปรแกรม) — รอสักครู่ ปิดไปจริงก็เปิดแทน ไม่งั้นจบแค่นี้
+    if not _instance.acquire(3000):
+        sys.exit(0)
 
 
 def resource_path(filename):
@@ -412,6 +426,8 @@ STATUS_TH = {
 
 # ========== หน้าต่างหลัก ==========
 root = tk.Tk()
+if START_HIDDEN:
+    root.withdraw()  # ซ่อนตั้งแต่ก่อนวาดอะไร — ไม่ให้หน้าต่างแวบขึ้นมาตอนเปิดเครื่อง
 root.title(f"🔔 {APP_NAME} — พนักงาน")
 root.resizable(True, True)  # ขนาดจริงคำนวณจากเนื้อหาใน refit()
 root.configure(bg=C["bg"])
@@ -641,12 +657,23 @@ room_name_label.pack(pady=(14, 2))
 me_label = tk.Label(room_view, text="", font=F_NORMAL, bg=C["bg"], fg=C["muted"])
 me_label.pack()
 
-member_card = RoundedCard(room_view, 640, 300)  # กว้างกว่าการ์ดอื่น — ตารางนี้มี 4 คอลัมน์
+# 🔔 เช็คชื่อของฉัน — จุด 3 รอบแบบเดียวกับฝั่งแอดมิน ดูแล้วรู้เลยว่ารอบไหนเช็คแล้ว/ยังไม่เช็ค
+my_box = tk.Frame(room_view, bg=C["bg"])
+my_box.pack(pady=(8, 0))
+my_dots = tk.Canvas(my_box, width=360, height=66, bg=C["bg"], highlightthickness=0, bd=0)
+my_dots.pack()
+my_note = tk.Label(my_box, text="", font=F_BOLD, bg=C["bg"], fg=C["muted"])
+my_note.pack()
+
+member_card = RoundedCard(room_view, 720, 300)  # กว้างกว่าการ์ดอื่น — ตารางนี้มี 5 คอลัมน์
 member_card.pack(fill="both", expand=True, padx=20, pady=8)  # ยืด-หดตามหน้าต่าง
 tk.Label(member_card.inner, text="👥 พนักงานในห้องนี้", font=F_HEAD,
          bg=C["card"], fg=C["gold_light"]).pack(anchor="w", pady=(0, 6))
 member_tree = ttk.Treeview(member_card.inner, columns=("name", "status", "activity", "today"),
-                           show="headings", height=5, style="Odol.Treeview")
+                           show="tree headings", height=5, style="Odol.Treeview")
+# คอลัมน์ #0 = จุดสีเช็คชื่อ 3 รอบ (Treeview ใส่รูปได้เฉพาะคอลัมน์นี้) — แบบเดียวกับตารางของแอดมิน
+member_tree.heading("#0", text="🔔 เช็คชื่อ")  # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
+member_tree.column("#0", anchor="w")
 member_tree.heading("name", text="👤 ชื่อ")
 member_tree.heading("status", text="📊 สถานะ")
 member_tree.heading("activity", text="🏃 ตอนนี้")
@@ -656,7 +683,7 @@ member_tree.column("status", anchor="center")
 member_tree.column("activity", anchor="center")
 member_tree.column("today", anchor="center")
 member_tree.pack(fill="both", expand=True)
-member_fit = theme.FitTable(member_tree, base_width=600)  # 600 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
+member_fit = theme.FitTable(member_tree, base_width=680)  # 680 = ความกว้างในการ์ดตอนหน้าต่างขนาดปกติ
 member_tree.tag_configure("me", foreground=C["gold_light"])
 member_tree.tag_configure("over", foreground=C["red"])  # ออกไปเกินเวลาที่กำหนด
 
@@ -667,7 +694,8 @@ GoldButton(room_btns, "🚪 ออกจากห้อง / ย้ายห้�
            command=lambda: leave_room(), bg=C["bg"]).pack(side="left", padx=6)
 GoldButton(room_btns, "📊 สถิติของฉัน", w=180, kind="gold",
            command=lambda: request_my_stats(), bg=C["bg"]).pack(side="left", padx=6)
-tk.Label(room_view, text="🔔 เมื่อแอดมินเรียกเช็คชื่อ จะมีเสียงและหน้าต่างเด้งขึ้นมา",
+tk.Label(room_view, text="🔔 แอดมินเรียกเช็คชื่อเมื่อไหร่ จะมีเสียงและหน้าต่างเด้งขึ้นมา"
+         " — กด ✕ ปิดหน้าต่างได้ โปรแกรมยังทำงานอยู่ที่มุมขวาล่าง",
          font=F_SMALL, bg=C["bg"], fg=C["muted"]).pack(side="bottom", before=room_btns)
 
 
@@ -1253,13 +1281,38 @@ def join_selected():
     if not sel:
         messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเลือกห้องจากตารางก่อน")
         return
+    autojoin["tried"] = True  # เลือกห้องเองแล้ว — ไม่ต้องพาเข้าห้องเดิมให้อีก
+    join_room(room_tree.item(sel[0], "values")[0], name)
+
+
+def join_room(room, name):
     state["name"] = name
-    sio.emit("join_room_member", {"room": room_tree.item(sel[0], "values")[0], "name": name,
-                                  "version": updater.APP_VERSION})
+    sio.emit("join_room_member", {"room": room, "name": name, "version": updater.APP_VERSION})
+
+
+# 🚪 เข้าห้องเดิมให้เอง — เปิดเครื่องแล้วโปรแกรมเปิดขึ้นมาเอง ก็พร้อมรับการเรียกเช็คชื่อทันทีโดยไม่ต้องกดอะไร
+autojoin = {"room": prefs.get("last_room", ""), "tried": False}
+
+
+def try_auto_join(rooms):
+    room = autojoin["room"]
+    if autojoin["tried"] or not room or state["room"]:
+        return
+    name = name_entry.get().strip()
+    if not name or not any(r.get("name") == room for r in rooms):
+        return  # ยังไม่มีห้องนี้ (เช่น เซิร์ฟเวอร์เพิ่งเริ่มใหม่ แอดมินยังไม่สร้าง) — รอรายการห้องรอบหน้า
+    autojoin["tried"] = True
+    try:
+        join_room(room, name)
+        set_status(f"🚪 กำลังพาเข้าห้องเดิม ({room}) ให้อัตโนมัติ...", C["muted"])
+    except Exception:
+        autojoin["tried"] = False  # ส่งไม่ออก (หลุดพอดี) — ต่อติดแล้วได้รายการห้องใหม่ค่อยลองอีกที
 
 
 def leave_room():
     if state["connected"]:
+        prefs.set("last_room", "")  # ออกเอง = ครั้งหน้าไม่ต้องพาเข้าห้องเดิม
+        autojoin["room"] = ""
         sio.emit("leave_room")
 
 
@@ -1314,12 +1367,125 @@ def render_rooms(rooms):
         if r["name"] == keep:
             room_tree.selection_set(iid)
     room_fit.refresh()
+    try_auto_join(rooms)
 
 
 # ข้อมูลจากระบบ check-status ที่เซิร์ฟเวอร์ส่งมาให้ทั้งห้อง (ใครออกไปทำอะไร ใช้เวลาไปเท่าไหร่แล้วในกะนี้)
-status_info = {"people": {}}
+status_info = {"people": {}, "round": 1}
 ACTIVITY_SHORT = {"กลับที่นั่ง": "✅ อยู่ที่นั่ง", "ปวดหนัก": "🚻 ปวดหนัก",
                   "ปวดน้อย": "🚻 ปวดน้อย", "กินข้าว": "🍚 กินข้าว"}
+
+# สีของจุดเช็คชื่อแต่ละรอบ — ชุดเดียวกับโปรแกรมแอดมิน (และหน้าเว็บของระบบสถานะ)
+ROUND_COLOR = {"green": "#4ADE80",   # เช็คแล้ว
+               "red": "#F87171",     # ประกาศรอบแล้วแต่ยังไม่เช็ค
+               "gray": "#4A4463",    # ยังไม่ประกาศรอบนี้
+               "unknown": "#8A84A3",  # ประกาศแล้วแต่ไม่รู้ว่าเช็คหรือยัง
+               "offshift": "#3A3550",
+               "holiday": "#FBBF24",
+               "dayoff": "#FBBF24"}
+ROUND_OFF_TEXT = {"offshift": "ไม่ใช่กะนี้", "holiday": "วันหยุด", "dayoff": "วันหยุด (ลา)"}
+_dot_images = {}  # เก็บรูปที่วาดแล้วไว้ใช้ซ้ำ (และกัน Tkinter ลบรูปทิ้งเพราะไม่มีใครอ้างอิง)
+
+
+def _dots_image(rounds):
+    """จุดสี 3 วงเป็นรูปเล็กๆ สำหรับช่องในตาราง — พื้นหลังโปร่งใส ใช้ได้ทั้งธีมมืดและสว่าง"""
+    key = tuple(rounds)
+    img = _dot_images.get(key)
+    if img is not None:
+        return img
+    d, gap, pad = 13, 7, 3                       # ขนาดจุด, ระยะห่าง, ขอบ
+    w = pad * 2 + d * 3 + gap * 2
+    h = d + pad * 2
+    img = tk.PhotoImage(width=w, height=h)       # รูปใหม่ = โปร่งใสทั้งหมด
+    r = d / 2.0
+    for i, st in enumerate(list(rounds)[:3]):
+        color = ROUND_COLOR.get(st, ROUND_COLOR["gray"])
+        cx = pad + i * (d + gap) + r
+        cy = pad + r
+        for y in range(h):                        # ไล่ทีละแถวให้ออกมาเป็นวงกลม
+            dy = y + 0.5 - cy
+            if abs(dy) > r:
+                continue
+            dx = math.sqrt(max(0.0, r * r - dy * dy))
+            x0, x1 = int(round(cx - dx)), int(round(cx + dx))
+            if x1 > x0:
+                img.put(color, to=(x0, y, x1, y + 1))
+    _dot_images[key] = img
+    return img
+
+
+def _rounds_cell(info):
+    """คืน (รูปจุดสี, ข้อความต่อท้าย) ของช่องเช็คชื่อในตาราง — เวลาโชว์เฉพาะรอบปัจจุบัน"""
+    rounds = (info.get("rounds") or []) if info.get("match") == "ok" else []
+    if not rounds:
+        return None, "—"
+    if rounds[0] in ROUND_OFF_TEXT:  # ไม่ใช่กะนี้ / วันหยุด → เป็นข้อความไปเลย ไม่ต้องมีจุด
+        return None, ROUND_OFF_TEXT[rounds[0]]
+    cur = status_info["round"]
+    times = info.get("times") or []
+    at = times[cur - 1] if len(times) >= cur else ""
+    return _dots_image(rounds), ("  " + at if at else "")
+
+
+def _my_checkin_note(info, rounds, times, cur):
+    """ข้อความใต้จุดของตัวเอง — บอกตรงๆ ว่ารอบตอนนี้เช็คแล้วหรือยัง"""
+    if not state["room"]:
+        return "", C["muted"]
+    if not info:
+        return "⏳ กำลังโหลดสถานะเช็คชื่อ...", C["muted"]
+    if info.get("match") == "ambiguous":
+        return "❓ ชื่อนี้ตรงกับหลายคนในกลุ่ม — ใส่ชื่อให้ตรงกับในกลุ่มเช็คชื่อ", C["amber"]
+    if info.get("match") != "ok" or not rounds:
+        return "❓ ยังหาชื่อคุณในกลุ่มเช็คชื่อไม่เจอ — ใส่ชื่อให้ตรงกับในกลุ่ม", C["amber"]
+    if rounds[0] == "offshift":
+        return "💤 ตอนนี้ไม่ใช่กะของคุณ", C["muted"]
+    if rounds[0] in ("holiday", "dayoff"):
+        return f"🌴 วันนี้เป็น{ROUND_OFF_TEXT[rounds[0]]}ของคุณ", C["gold_light"]
+    st = rounds[cur - 1] if len(rounds) >= cur else "gray"
+    at = times[cur - 1] if len(times) >= cur else ""
+    if st == "green":
+        return f"✅ เช็คชื่อรอบ {cur} แล้ว" + (f" ({at})" if at else ""), C["green"]
+    if st == "red":
+        return f"❗ ยังไม่ได้เช็คชื่อรอบ {cur} — ไปเช็คชื่อในกลุ่มด่วน", C["red"]
+    if st == "unknown":
+        return f"❔ รอบ {cur}: ยังไม่รู้ผลการเช็คชื่อ", C["muted"]
+    return f"⏳ ยังไม่ถึงเวลาเช็คชื่อรอบ {cur}", C["muted"]
+
+
+def render_my_checkin():
+    """จุด 3 รอบของตัวเองตัวใหญ่ใต้ชื่อ + คำอธิบาย (วงทองล้อม = รอบตอนนี้)"""
+    info = status_info["people"].get(state["name"]) or {}
+    cur = status_info.get("round") or 1
+    rounds = list(info.get("rounds") or []) if info.get("match") == "ok" else []
+    times = list(info.get("times") or [])
+    my_dots.delete("all")
+    off = bool(rounds) and rounds[0] in ROUND_OFF_TEXT
+    for i in range(3):
+        n = i + 1
+        cx, cy, r = 60 + i * 120, 17, 11
+        st = rounds[i] if len(rounds) > i else ""
+        at = times[i] if len(times) > i else ""
+        if n == cur and rounds and not off:
+            my_dots.create_oval(cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4,
+                                outline=C["gold"], width=2)
+        my_dots.create_oval(cx - r, cy - r, cx + r, cy + r,
+                            fill=ROUND_COLOR.get(st, ROUND_COLOR["gray"]) if st else C["card_dark"],
+                            outline="" if st else C["muted"])
+        my_dots.create_text(cx, cy + 24, text=f"รอบ {n}", font=F_SMALL,
+                            fill=C["text"] if n == cur else C["muted"])
+        sub = {"green": f"✓ {at}" if at else "✓ เช็คแล้ว", "red": "ยังไม่เช็ค",
+               "gray": "ยังไม่ถึงรอบ", "unknown": "ไม่ทราบ"}.get(st, "")
+        my_dots.create_text(cx, cy + 41, text=sub, font=F_SMALL,
+                            fill=ROUND_COLOR["red"] if st == "red" else C["muted"])
+    text, color = _my_checkin_note(info, rounds, times, cur)
+    my_note.config(text=text, fg=color)
+    # ไอคอนถาด: จุดแดง = รอบนี้ยังไม่เช็ค / จุดเขียว = เช็คแล้ว — ซ่อนหน้าต่างไว้ก็ยังรู้
+    st_now = rounds[cur - 1] if (rounds and not off and len(rounds) >= cur) else ""
+    state["my_round"] = (cur, st_now)
+    update_tray()
+
+
+theme.on_change(lambda: render_my_checkin())
 
 
 def _member_extra(name):
@@ -1342,23 +1508,29 @@ def render_members(data):
     member_tree.delete(*member_tree.get_children())
     for m in data["members"]:
         act_txt, today_txt, over = _member_extra(m["name"])
+        dots_img, rounds_txt = _rounds_cell(status_info["people"].get(m["name"]) or {})
         tags = ("over",) if over else (("me",) if m["name"] == state["name"] else ())
-        member_tree.insert("", "end", tags=tags,
+        member_tree.insert("", "end", tags=tags, text=rounds_txt, image=dots_img or "",
                            values=(m["name"], STATUS_TH.get(m["status"], m["status"]),
                                    act_txt, today_txt))
     member_fit.refresh()
+    render_my_checkin()
 
 
 @sio.on("members_status")
 def on_members_status(data):
-    """เซิร์ฟเวอร์ส่งสถานะจากระบบ check-status มาให้ทั้งห้อง — เอามาเติมสองคอลัมน์ขวา"""
+    """เซิร์ฟเวอร์ส่งสถานะจากระบบ check-status มาให้ทั้งห้อง — จุดเช็คชื่อ + สองคอลัมน์ขวา"""
     def _apply():
         if not isinstance(data, dict) or data.get("room") != state["room"]:
             return
         status_info["people"] = data.get("people") or {}
+        status_info["round"] = data.get("current_round") or 1
+        member_tree.heading("#0", text=f"🔔 เช็คชื่อ (รอบ {status_info['round']})")
         cached = state.get("members_cache")
         if cached:
             render_members(cached)
+        else:
+            render_my_checkin()
     root.after(0, _apply)
 
 
@@ -1380,10 +1552,16 @@ def on_room_state(data):
 def on_joined(data):
     def _apply():
         close_popup()  # popup ค้างจากห้องเก่า/รอบเก่า ใช้ไม่ได้แล้ว
+        if data["room"] != state["room"]:
+            status_info["people"] = {}  # สถานะของห้องเก่า — รอของห้องใหม่ส่งมา
+            state["members_cache"] = None
         state["room"] = data["room"]
         show_room(data["room"])
         set_status(f"✅ เข้าห้อง {data['room']} แล้ว — รอแอดมินเรียกเช็คชื่อ")
         save_name(state["name"])  # ✅ จำชื่อไว้สำหรับครั้งต่อไป
+        prefs.set("last_room", data["room"])  # เปิดครั้งหน้า (หรือเปิดเครื่องใหม่) พาเข้าห้องนี้ให้เอง
+        autojoin.update(room=data["room"], tried=True)
+        render_my_checkin()
         if data.get("pending"):  # หลุดไปตอนถูกเรียก แล้วต่อกลับมาทันเวลา — เปิดป๊อปอัพให้กดยืนยันต่อ
             open_check_popup()
     root.after(0, _apply)
@@ -1394,8 +1572,14 @@ def on_left(_):
     def _apply():
         close_popup()
         state["room"] = None
+        status_info["people"] = {}
+        state["members_cache"] = None
         show_lobby()
         set_status("ออกจากห้องแล้ว — เลือกห้องใหม่ได้เลย")
+        update_tray()
+        if root.state() == "withdrawn":
+            # ถูกพาออกจากห้อง (เช่น แอดมินลบห้อง) ตอนซ่อนอยู่ — ต้องให้เห็น จะได้เลือกห้องใหม่ ไม่งั้นไม่มีใครเรียกถึง
+            show_window()
     root.after(0, _apply)
 
 
@@ -1485,6 +1669,7 @@ def disconnect():
     def _apply():
         state["connected"] = False
         conn_label.config(text="⚠️ หลุดการเชื่อมต่อ กำลังต่อใหม่...")
+        update_tray()
     root.after(0, _apply)
     # ✅ ถ้าไลบรารีต่อ URL เดิมไม่ติดใน 12 วิ → สแกนหาทุกช่องทางใหม่ (LAN/ลิงก์/ช่องกรอก)
     if not state.get("watchdog"):
@@ -1505,6 +1690,7 @@ def connect():
     def _apply():
         state["connected"] = True
         conn_label.config(text="✅ เชื่อมต่อเซิร์ฟเวอร์แล้ว")
+        update_tray()
     root.after(0, _apply)
     # 🔔 บอกชื่อให้เซิร์ฟเวอร์รู้ทันที — จะได้เตือนเช็คชื่อแม้ยังไม่ได้เข้าห้อง
     try:
@@ -1602,8 +1788,105 @@ updater.auto_update(root, "golden-bell-employee.exe", set_status)
 updater.watch_for_updates(root, "golden-bell-employee.exe", set_status,
                           can_update=lambda: state.get("popup") is None
                           and checkin_state["win"] is None)
+
+
+# ========== 🖥️ ถาดไอคอน — กด ✕ แล้วโปรแกรมยังทำงานต่อ (รับการเรียกเช็คชื่อ/ป้ายเตือนได้ครบเหมือนเดิม) ==========
+AUTOSTART_NAME = "GoldenBellEmployee"  # ชื่อรายการเปิดเองตอนเปิดเครื่อง (HKCU\...\Run)
+tray_icon = tray.Tray(resource_path("logo.ico"), f"🔔 {APP_NAME}")
+
+
+def update_tray():
+    """ข้อความตอนชี้ที่ไอคอน + จุดสีมุมไอคอน (แดง = รอบนี้ยังไม่เช็คชื่อ / เขียว = เช็คแล้ว)"""
+    if not tray_icon.running:
+        return
+    lines = [f"🔔 {APP_NAME}"]
+    if not state["connected"]:
+        lines.append("⚠️ ยังไม่เชื่อมต่อเซิร์ฟเวอร์")
+    elif state["room"]:
+        lines.append(f"📌 ห้อง {state['room']}")
+    else:
+        lines.append("ยังไม่ได้เข้าห้อง — คลิกเพื่อเลือกห้อง")
+    cur, st = state.get("my_round") or (1, "")
+    if not state["room"]:
+        st = ""
+    if st == "green":
+        lines.append(f"✅ เช็คชื่อรอบ {cur} แล้ว")
+    elif st == "red":
+        lines.append(f"❗ ยังไม่ได้เช็คชื่อรอบ {cur}")
+    tray_icon.set_title("\n".join(lines))
+    tray_icon.set_badge({"green": "#22C55E", "red": "#EF4444"}.get(st))
+
+
+def show_window():
+    root.deiconify()
+    root.lift()
+    try:
+        root.attributes("-topmost", True)  # ดึงขึ้นมาหน้าสุดก่อน แล้วปล่อยกลับเป็นหน้าต่างปกติ
+        root.after(300, lambda: root.attributes("-topmost", False))
+        root.focus_force()
+    except Exception:
+        pass
+
+
+def hide_window():
+    """กด ✕ = ซ่อนไว้ที่ถาด โปรแกรมยังทำงานอยู่ — ออกจริงต้องคลิกขวาที่ไอคอน → ออกจากโปรแกรม"""
+    if not tray_icon.running:
+        root.iconify()  # สร้างไอคอนถาดไม่ได้ — ย่อไว้ที่แถบงานแทน (ห้ามซ่อนจนหาไม่เจอ)
+        return
+    root.withdraw()
+    if not state.get("tray_hint"):
+        state["tray_hint"] = True  # บอกครั้งเดียวต่อการเปิดโปรแกรมหนึ่งครั้ง
+        tray_icon.notify("โปรแกรมยังทำงานอยู่ — คลิกไอคอนกระดิ่งที่มุมขวาล่างเพื่อเปิดหน้าต่าง",
+                         APP_NAME)
+
+
+def quit_app():
+    show_window()
+    if not messagebox.askyesno("ออกจากโปรแกรม",
+                               "ปิดโปรแกรมจริงไหม?\n\nปิดแล้วจะไม่ได้รับการเรียกเช็คชื่อ\n"
+                               "และป้ายเตือนต่างๆ จนกว่าจะเปิดโปรแกรมใหม่", parent=root):
+        return
+    tray_icon.stop()
+    root.destroy()
+
+
+def toggle_autostart():
+    on = not prefs.get("autostart", True)
+    prefs.set("autostart", on)
+    tray.set_autostart(AUTOSTART_NAME, on)
+    tray_icon.update_menu()
+    tray_icon.notify("เปิดเครื่องครั้งหน้า โปรแกรมจะเปิดขึ้นมาเอง" if on
+                     else "ปิดแล้ว — เปิดเครื่องครั้งหน้าต้องเปิดโปรแกรมเอง", APP_NAME)
+
+
+root.protocol("WM_DELETE_WINDOW", hide_window)
+tray_icon.start([
+    ("เปิดหน้าต่าง", lambda: root.after(0, show_window), {"default": True}),
+    ("เปิดโปรแกรมเองตอนเปิดเครื่อง", lambda: root.after(0, toggle_autostart),
+     {"checked": lambda: prefs.get("autostart", True)}),
+    None,
+    ("ออกจากโปรแกรม", lambda: root.after(0, quit_app)),
+])
+update_tray()
+_instance.listen(lambda: root.after(0, show_window))  # มีคนกดเปิดโปรแกรมซ้ำ → โชว์หน้าต่างตัวนี้แทน
+tray.set_autostart(AUTOSTART_NAME, prefs.get("autostart", True))  # ย้ายโฟลเดอร์ไป ก็ชี้ตามไปให้
+
+# อัพเดทแล้วเปิดตัวใหม่: ปล่อยตัวล็อก + เก็บไอคอนก่อน (ตัวใหม่เปิดได้ทันที ไม่มีไอคอนผีค้างที่ถาด)
+# ตอนซ่อนอยู่ ตัวใหม่ก็เปิดแบบซ่อนต่อ ไม่เด้งหน้าต่างขึ้นมาเอง
+updater.before_restart += [tray_icon.hide_now, _instance.release]
+updater.restart_failed += [_instance.acquire, tray_icon.show_again]
+updater.restart_args = lambda: ["--tray"] if root.state() == "withdrawn" else []
+
+if START_HIDDEN:
+    if not (tray_icon.running and autojoin["room"] and name_entry.get().strip()):
+        show_window()  # ซ่อนไม่ได้ หรือยังต้องเลือกห้องเอง — โชว์หน้าต่างเลย
+    else:
+        # เข้าห้องเดิมไม่ได้ภายในเวลาที่ควร (ห้องถูกลบ / เน็ตยังไม่มา) — โชว์หน้าต่างให้เลือกเอง
+        root.after(45000, lambda: state["room"] or show_window())
+
 root.mainloop()
 
+tray_icon.stop()
 try:
     sio.disconnect()
 except:
