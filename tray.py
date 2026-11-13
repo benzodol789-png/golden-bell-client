@@ -101,7 +101,7 @@ def _run_value(value_name):
         return None
 
 
-def autostart_command(args=("--tray",)):
+def autostart_command(args=("--tray", "--autostart")):
     """คำสั่งที่ Windows ใช้เปิดโปรแกรมตอนเข้าเครื่อง — None ถ้าลงทะเบียนไม่ได้"""
     if not getattr(sys, "frozen", False):
         return None  # รันจาก source — ห้ามแตะการตั้งค่าเปิดเครื่องของตัว .exe ที่ใช้งานจริง

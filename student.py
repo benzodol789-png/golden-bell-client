@@ -16,23 +16,12 @@ import prefs    # 💾 เก็บค่าตั้งค่าของผู
 import theme    # 🎨 ระบบธีม มืด/สว่าง
 import tray     # 🖥️ ไอคอนถาด + เปิดเองตอนเปิดเครื่อง + กันเปิดซ้อน
 import updater  # 🔄 ระบบอัพเดทโปรแกรมจาก GitHub Releases
-
-updater.cleanup_old()  # ลบไฟล์ .old ที่ค้างจากการอัพเดทรอบก่อน
+import startup_policy  # วันหยุดข้ามเฉพาะการเปิดอัตโนมัติ ยังเปิดเองได้เสมอ
 
 APP_NAME = "กระดิ่งทอง มรณะ"
 
 # 🖥️ เปิดแบบซ่อนไว้ที่ถาดไอคอน — Windows เปิดให้เองตอนเปิดเครื่อง (และตอนรีสตาร์ทหลังอัพเดทขณะซ่อนอยู่)
-START_HIDDEN = "--tray" in sys.argv[1:]
-
-# 🔒 เปิดได้ทีละตัว — กดเปิดซ้ำ = เรียกหน้าต่างของตัวที่เปิดอยู่ขึ้นมาแทน ไม่มีสองตัวรับการเรียกซ้อนกัน
-#    (รันจาก source ใช้คนละชื่อ ไม่ชนกับตัว .exe ที่เปิดใช้งานจริงอยู่ในเครื่องเดียวกัน)
-_instance = tray.SingleInstance("GoldenBell.Employee" + ("" if getattr(sys, "frozen", False) else ".dev"))
-if not os.environ.get("ODOL_MULTI") and not _instance.acquire():
-    if not START_HIDDEN:
-        _instance.signal_existing()
-    # ตัวเดิมอาจกำลังปิดอยู่ (เพิ่งกดออกจากโปรแกรม) — รอสักครู่ ปิดไปจริงก็เปิดแทน ไม่งั้นจบแค่นี้
-    if not _instance.acquire(3000):
-        sys.exit(0)
+START_HIDDEN = "--tray" in sys.argv[1:] or startup_policy.automatic_launch(sys.argv[1:])
 
 
 def resource_path(filename):
@@ -150,11 +139,12 @@ def discover_servers(wait=1.0):
 
 
 # ========== จำชื่อพนักงานไว้ในเครื่อง — เปิดครั้งต่อไปไม่ต้องพิมพ์ใหม่ ==========
-def name_store_path():
+def name_store_path(create=True):
     base = os.environ.get("APPDATA") or app_dir()
     folder = os.path.join(base, "GoldenBellCheckin")
     try:
-        os.makedirs(folder, exist_ok=True)
+        if create:
+            os.makedirs(folder, exist_ok=True)
         return os.path.join(folder, "user.txt")
     except OSError:
         return None
@@ -162,7 +152,7 @@ def name_store_path():
 
 def load_saved_name():
     try:
-        path = name_store_path()
+        path = name_store_path(create=False)
         if path and os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return f.read().strip()
@@ -179,6 +169,27 @@ def save_name(name):
                 f.write(name)
     except Exception:
         pass
+
+
+# วันหยุดไม่เปิดโปรแกรมเอง: ตรวจให้เสร็จก่อนสร้างหน้าต่าง ต่อห้อง หรือไอคอนถาด
+# ไม่ลบค่าเปิดพร้อม Windows เพราะวันทำงานถัดไปยังต้องเปิดเองตามปกติ
+_startup_override = os.environ.get("ODOL_URL", "").strip()
+_startup_urls = ([normalize_target(_startup_override)] if _startup_override else [
+    normalize_target(PINNED), normalize_target(prefs.get("last_server_url", "")),
+    f"https://{SERVER_DOMAIN}",
+])
+if startup_policy.should_skip_startup(sys.argv[1:], load_saved_name(), _startup_urls, ACCESS_CODE):
+    sys.exit(0)
+
+updater.cleanup_old()  # ให้การเริ่มข้ามวันหยุดจบก่อนแตะไฟล์เก่าของ updater
+
+# 🔒 เปิดได้ทีละตัว — หลังผ่านกติกาวันหยุดแล้วจึงจองตัวล็อกของโปรแกรม
+_instance = tray.SingleInstance("GoldenBell.Employee" + ("" if getattr(sys, "frozen", False) else ".dev"))
+if not os.environ.get("ODOL_MULTI") and not _instance.acquire():
+    if not START_HIDDEN:
+        _instance.signal_existing()
+    if not _instance.acquire(3000):
+        sys.exit(0)
 
 
 # ========== เสียงแจ้งเตือน (MCI ของ Windows) ==========
@@ -1799,6 +1810,7 @@ def connect_worker():
                 try:
                     root.after(0, conn_label.config, {"text": f"🔍 กำลังลอง {url} ..."})
                     sio.connect(url, auth={"code": ACCESS_CODE}, wait_timeout=10)
+                    prefs.set("last_server_url", url)  # ใช้ตรวจวันหยุดก่อนเปิดอัตโนมัติครั้งหน้า
                     # ✅ เชื่อมต่อสำเร็จแล้ว → ถาม server ว่า IP config ที่แอดมินตั้ง
                     sio.emit("get_config")
                     return
