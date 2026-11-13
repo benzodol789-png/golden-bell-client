@@ -722,19 +722,25 @@ def show_room(room):
 # กติกา: เด้งเฉพาะตอนระบบประกาศรอบแล้วแต่คนนี้ยังไม่เช็ค
 #   - ยังไม่เช็ค : เสียงดัง 1 ครั้ง แล้วรูปค้างบนจอ ไม่หายเอง จนกว่าจะกดปิด
 #   - เช็คชื่อสำเร็จ : ไม่ต้องทำอะไร (กว่าจะไปกดเช็คได้ เขาปิดป้ายไปก่อนแล้ว)
-#   - กดปิดแล้ว : จบ ไม่เตือนซ้ำอีกในรอบนั้น ไม่ว่าจะเช็คแล้วหรือยัง
+#   - กดปิดแล้ว : ไม่เปิดป้ายเดิมซ้ำ แต่รับการเตือนอีกครั้งเมื่อเหลือ 3 นาทีได้
 #   - ขึ้นรอบใหม่ : เริ่มเตือนใหม่ตามปกติ
 
-# acked = เลขรอบที่กดปิดไปแล้ว (รอบใหม่ค่อยเตือนอีกครั้ง)
+# แยกป้ายครั้งแรก/เตือนซ้ำด้วย alert_id ของเซิร์ฟเวอร์ เพื่อกันเด้งซ้ำเมื่อเน็ตหลุด
 checkin_state = {"win": None, "img": None, "alert": None,
-                 "acked": None, "cleared": None}
+                 "acked": None, "cleared": None, "seen": {}}
+
+
+def _checkin_alert_key(alert):
+    identifier = alert.get("alert_id") or "legacy|%s|%s" % (
+        time.strftime("%Y-%m-%d"), alert.get("round") or 1)
+    return (str(identifier), bool(alert.get("reminder")))
 
 
 def close_checkin_popup(clear_alert=False, acked=False):
-    """ปิดป๊อปอัพ — acked=True คือผู้ใช้กดรับทราบเอง (จะไม่เตือนซ้ำอีกในรอบนั้น)"""
+    """ปิดป้ายครั้งนี้ การรับทราบไม่ใช่การเช็คชื่อและไม่ปิดกั้นเตือนก่อนหมดเวลา"""
     if acked:
         alert = checkin_state["alert"] or {}
-        checkin_state["acked"] = alert.get("round") or 1
+        checkin_state["acked"] = _checkin_alert_key(alert)
     stop_checkin_alert()
     win = checkin_state["win"]
     checkin_state["win"] = None
@@ -751,27 +757,27 @@ def close_checkin_popup(clear_alert=False, acked=False):
 
 def show_checkin_popup(alert):
     rnd = alert.get("round") or 1
-    if checkin_state["acked"] == rnd:
-        return  # กดปิดรอบนี้ไปแล้ว — ไม่กวนซ้ำ
+    key = _checkin_alert_key(alert)
+    if key in checkin_state["seen"] or checkin_state["acked"] == key:
+        return  # ป้ายเดิมที่ส่งซ้ำจาก reconnect; เตือน 3 นาทีใช้ key คนละตัว
     # เพิ่งเช็คชื่อรอบนี้ไปหมาดๆ — ข้อมูลฝั่งระบบอาจแกว่งอยู่ครู่หนึ่ง อย่าเพิ่งเด้งซ้ำ
     cleared = checkin_state.get("cleared") or {}
-    if cleared.get("round") == rnd and time.time() - cleared.get("at", 0) < 300:
+    if not alert.get("alert_id") and cleared.get("round") == rnd and time.time() - cleared.get("at", 0) < 300:
         return
 
     win = checkin_state["win"]
     if win is not None and win.winfo_exists():
-        # ป้ายของรอบนี้อยู่บนจออยู่แล้ว — ปล่อยไว้เฉยๆ ไม่ต้องทำอะไรทั้งนั้น
-        # (เขากดอิโมจิหรือเปลี่ยนสถานะระหว่างนั้น ก็ไม่ต้องไปยุ่งกับป้าย)
-        if (checkin_state["alert"] or {}).get("round") == rnd:
-            return
-        close_checkin_popup()  # เป็นรอบใหม่ — เก็บป้ายเก่าทิ้งก่อนขึ้นป้ายใหม่
+        close_checkin_popup()  # เตือนซ้ำก่อนหมดเวลา: เปลี่ยนป้ายและเล่นเสียงอีกครั้ง
 
     checkin_state["alert"] = alert
+    checkin_state["seen"][key] = time.time()
+    while len(checkin_state["seen"]) > 64:
+        checkin_state["seen"].pop(next(iter(checkin_state["seen"])))
     away = bool(alert.get("away"))
 
     win = tk.Toplevel(root)
     checkin_state["win"] = win
-    win.title(f"🔔 ถึงเวลาเช็คชื่อรอบที่ {rnd}")
+    win.title(f"🔔 {'เตือนอีกครั้ง — ' if alert.get('reminder') else ''}เช็คชื่อรอบที่ {rnd}")
     win.configure(bg=C["bg"])
     win.resizable(False, False)
     win.overrideredirect(True)  # ไม่เอาแถบหัวหน้าต่าง — ให้เหลือแต่ป้ายแจ้งเตือนล้วนๆ
@@ -798,7 +804,8 @@ def show_checkin_popup(alert):
         tk.Label(win, text="🔔 มีการเช็คชื่อนะ", font=("Segoe UI", 22, "bold"),
                  bg=C["bg"], fg=C["gold"]).pack(padx=40, pady=(24, 8))
 
-    info = tk.Label(win, text="", font=F_BOLD, bg=C["bg"], fg=C["gold_light"])
+    info = tk.Label(win, text="", font=F_BOLD, bg=C["bg"], fg=C["gold_light"],
+                    wraplength=min(720, root.winfo_screenwidth() - 100), justify="center")
     info.pack(pady=(0, 4))
     win.info_label = info
     GoldButton(win, "✅ รับทราบ", w=240, kind="gold",
@@ -820,15 +827,31 @@ def show_checkin_popup(alert):
         win.lift()
         win.after(35, shake, n + 1)
 
-    shake()
-
     note = "อย่าลืมไปเช็คชื่อในกลุ่มด้วยนะ"
     if away:
         note = f"ตอนนี้คุณ{alert.get('activity') or 'ไม่อยู่ที่นั่ง'} — กลับมาแล้วรีบไปเช็คชื่อนะ"
-    try:
-        win.info_label.config(text=f"📋 ถึงเวลาเช็คชื่อรอบที่ {rnd} — {note}")
-    except Exception:
-        pass
+    title = "เตือนอีกครั้ง" if alert.get("reminder") else "ถึงเวลาเช็คชื่อ"
+    remaining = alert.get("remaining")
+    deadline = time.monotonic() + max(0, float(remaining)) if isinstance(remaining, (int, float)) else None
+
+    def tick():
+        if checkin_state["win"] is not win or not win.winfo_exists():
+            return
+        text = f"📋 {title}รอบที่ {rnd} — {note}"
+        if deadline is not None:
+            left = max(0, int(math.ceil(deadline - time.monotonic())))
+            text += f"\n⏳ เหลือเวลาเช็คชื่อ {left // 60}:{left % 60:02d} นาที" if left else "\n⌛ ครบเวลาเช็คชื่อแล้ว"
+        win.info_label.config(text=text)
+        if deadline is not None and deadline > time.monotonic():
+            win.after(1000, tick)
+
+    tick()
+    # ข้อความเตือนซ้ำมีบรรทัดนับถอยหลัง ต้องวัดความสูงหลังใส่ข้อความให้ปุ่มรับทราบไม่ถูกตัด
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    base_x, base_y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
+    win.geometry(f"{w}x{h}+{base_x}+{base_y}")
+    shake()
 
     play_checkin_alert()  # เสียงครั้งเดียวตอนป้ายขึ้น จากนั้นปล่อยรูปค้างไว้เฉยๆ
 
@@ -1166,7 +1189,12 @@ def close_popup():
             pass
 
 
-def open_check_popup():
+def open_check_popup(data=None):
+    data = data if isinstance(data, dict) else {}
+    if isinstance(data.get("remaining"), (int, float)):
+        state["call_deadline"] = time.monotonic() + max(0, data["remaining"])
+    elif state["popup"] is None:
+        state["call_deadline"] = None
     if state["popup"] is not None and state["popup"].winfo_exists():
         popup = state["popup"]
         popup.deiconify()
@@ -1181,7 +1209,7 @@ def open_check_popup():
     popup.resizable(False, False)
     # ✅ ปิดด้วยปุ่ม X ไม่ได้ — ต้องกดยืนยันเท่านั้น กันเผลอปิดแล้วไม่ได้เช็คชื่อ
     popup.protocol("WM_DELETE_WINDOW", lambda: None)
-    w, h = 460, 320
+    w, h = 460, 350
     sw, sh = popup.winfo_screenwidth(), popup.winfo_screenheight()
     base_x, base_y = (sw - w) // 2, (sh - h) // 2
     popup.geometry(f"{w}x{h}+{base_x}+{base_y}")
@@ -1192,6 +1220,19 @@ def open_check_popup():
              bg=C["bg"], fg=C["gold_light"]).pack(pady=(4, 2))
     tk.Label(popup, text=f"คุณ {state['name']} กรุณายืนยันการเข้างาน",
              font=F_NORMAL, bg=C["bg"], fg=C["text"]).pack()
+    countdown = tk.Label(popup, text="", font=F_BOLD, bg=C["bg"], fg=C["amber"])
+    countdown.pack(pady=(6, 0))
+
+    def tick():
+        if state["popup"] is not popup or not popup.winfo_exists():
+            return
+        deadline = state.get("call_deadline")
+        if deadline is not None:
+            left = max(0, int(math.ceil(deadline - time.monotonic())))
+            countdown.config(text=f"⏳ เหลือ {left // 60}:{left % 60:02d} นาที" if left else "⌛ ครบเวลาแล้ว กำลังรอสถานะจากเซิร์ฟเวอร์")
+        popup.after(1000, tick)
+
+    tick()
 
     def confirm():
         # ✅ บั๊ก #1 แก้: เพิ่ม re-entrancy guard — กันกดสองครั้งส่ง confirm สองครั้ง
@@ -1558,24 +1599,31 @@ def on_joined(data):
         state["room"] = data["room"]
         show_room(data["room"])
         set_status(f"✅ เข้าห้อง {data['room']} แล้ว — รอแอดมินเรียกเช็คชื่อ")
+        if data.get("reason") == "moved":
+            set_status(f"↪ แอดมินย้ายคุณมาห้อง {data['room']} แล้ว", C["gold"])
         save_name(state["name"])  # ✅ จำชื่อไว้สำหรับครั้งต่อไป
         prefs.set("last_room", data["room"])  # เปิดครั้งหน้า (หรือเปิดเครื่องใหม่) พาเข้าห้องนี้ให้เอง
         autojoin.update(room=data["room"], tried=True)
         render_my_checkin()
         if data.get("pending"):  # หลุดไปตอนถูกเรียก แล้วต่อกลับมาทันเวลา — เปิดป๊อปอัพให้กดยืนยันต่อ
-            open_check_popup()
+            open_check_popup(data.get("call"))
     root.after(0, _apply)
 
 
 @sio.on("left_room")
-def on_left(_):
+def on_left(data=None):
+    data = data if isinstance(data, dict) else {}
     def _apply():
         close_popup()
         state["room"] = None
+        prefs.set("last_room", "")
+        autojoin.update(room="", tried=True)  # ถูกเตะ/ลบห้องแล้วต้องไม่กลับเข้าห้องเดิมเอง
         status_info["people"] = {}
         state["members_cache"] = None
         show_lobby()
         set_status("ออกจากห้องแล้ว — เลือกห้องใหม่ได้เลย")
+        if data.get("reason") == "kicked":
+            set_status("แอดมินนำคุณออกจากห้องแล้ว — กรุณาเลือกห้องใหม่", C["amber"])
         update_tray()
         if root.state() == "withdrawn":
             # ถูกพาออกจากห้อง (เช่น แอดมินลบห้อง) ตอนซ่อนอยู่ — ต้องให้เห็น จะได้เลือกห้องใหม่ ไม่งั้นไม่มีใครเรียกถึง
@@ -1584,10 +1632,15 @@ def on_left(_):
 
 
 @sio.on("check_request")
-def on_check_request(_):
+def on_check_request(data=None):
+    data = data if isinstance(data, dict) else {}
     def _apply():
+        if data.get("room") and data["room"] != state["room"]:
+            return  # คำสั่งจากห้องเก่าที่มาถึงหลังถูกย้าย/เตะ
         close_missed_notice()  # ถูกเรียกใหม่แล้ว ป้าย "พลาดการเรียก" ครั้งก่อนไม่ต้องค้างไว้
-        open_check_popup()
+        open_check_popup(data)
+        if data.get("reminder"):
+            set_status("🔔 เตือนอีกครั้ง: เหลือเวลาเช็คชื่อไม่เกิน 3 นาที", C["amber"])
     root.after(0, _apply)
 
 

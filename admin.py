@@ -555,7 +555,7 @@ member_card = RoundedCard(room_view, 980, 360)
 member_card.pack(fill="both", expand=True, padx=24, pady=6)  # ยืด-หดตามหน้าต่าง
 member_tree = ttk.Treeview(member_card.inner,
                            columns=("name", "status", "time", "elapsed", "activity", "today"),
-                           show="tree headings", height=7, style="Odol.Treeview")
+                           show="tree headings", height=7, selectmode="extended", style="Odol.Treeview")
 # คอลัมน์ #0 ใช้โชว์จุดสีของการเช็คชื่อ 3 รอบ — Treeview ใส่รูปได้เฉพาะคอลัมน์นี้
 member_tree.heading("#0", text="🔔 เช็คชื่อ")           # หัวคอลัมน์เปลี่ยนตามรอบปัจจุบันเอง
 member_tree.heading("name", text="👤 ชื่อ")
@@ -587,13 +587,21 @@ GoldButton(room_btns, "✖ ยกเลิกเรียก", w=190, kind="red"
            command=lambda: cancel_selected(), bg=C["bg"]).pack(side="left", padx=10)
 GoldButton(room_btns, "🚪 ออกจากห้อง", w=190, kind="dark",
            command=lambda: leave_room(), bg=C["bg"]).pack(side="left", padx=10)
+
+member_manage_btns = tk.Frame(room_view, bg=C["bg"])
+member_manage_btns.pack(side="bottom", pady=(4, 0), before=member_card)
+GoldButton(member_manage_btns, "↪ ย้ายคนที่เลือกไปห้องอื่น", w=290, kind="blue",
+           command=lambda: move_selected_members(), bg=C["bg"]).pack(side="left", padx=10)
+GoldButton(member_manage_btns, "⛔ เตะคนที่เลือกออกจากห้อง", w=290, kind="red",
+           command=lambda: kick_selected_members(), bg=C["bg"]).pack(side="left", padx=10)
+
 def _timeout_text(seconds):
     seconds = int(seconds or 600)
     return f"{seconds // 60} นาที" if seconds % 60 == 0 else f"{seconds} วินาที"
 
 
 def _room_hint_text(timeout=None):
-    base = "💡 เลือกชื่อในตารางแล้วกดปุ่มเช็คชื่อ หรือดับเบิลคลิกที่ชื่อได้เลย"
+    base = "💡 Ctrl / Shift + คลิก เพื่อเลือกหลายคน • ดับเบิลคลิกที่ชื่อเพื่อเรียกเช็คชื่อ"
     if not timeout:  # เซิร์ฟเวอร์รุ่นเก่า — ยังไม่มีกติกา 10 นาที/การยกเลิก อย่าบอกสิ่งที่ยังใช้ไม่ได้
         return base
     return (f"{base}  •  ไม่กดยืนยันภายใน {_timeout_text(timeout)} = ไม่ตอบ\n"
@@ -771,6 +779,153 @@ def _send_cancel(sid, name, call=None):
         root.after(8000, on_timeout)
     except Exception:
         messagebox.showwarning("⚠️ ส่งไม่สำเร็จ", "การเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง")
+
+
+def _selected_manage_members(action):
+    """จับรายชื่อที่เลือกจากห้องปัจจุบัน ก่อนเปิดหน้าต่างยืนยันหรือเลือกห้อง"""
+    if not require_connection() or not require_admin_name(action):
+        return None
+    if state.get("member_action_pending"):
+        messagebox.showwarning("⚠️ รอสักครู่", "กำลังจัดการสมาชิก กรุณารอผลจากเซิร์ฟเวอร์ก่อน")
+        return None
+    room = state.get("room")
+    data = state.get("members_cache") or {}
+    if not room or data.get("room") != room:
+        messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเข้าห้องและรอรายชื่อสมาชิกก่อน")
+        return None
+    selected = member_tree.selection()
+    if not selected:
+        messagebox.showwarning("⚠️ แจ้งเตือน", "กรุณาเลือกสมาชิกในตารางก่อน\n"
+                               "กด Ctrl หรือ Shift ค้างไว้เพื่อเลือกหลายคน")
+        return None
+    rows = {m["sid"]: m for m in data.get("members") or []}
+    if any(sid not in rows for sid in selected):
+        messagebox.showwarning("⚠️ สมาชิกไม่พร้อม", "บางคนที่เลือกออฟไลน์หรือออกจากห้องไปแล้ว\n"
+                               "กรุณาเลือกเฉพาะสมาชิกที่ยังออนไลน์ในห้อง")
+        return None
+    return room, [rows[sid] for sid in selected]
+
+
+def _member_names_text(members):
+    names = [f"• {m['name']}" for m in members[:10]]
+    if len(members) > 10:
+        names.append(f"และอีก {len(members) - 10} คน")
+    return "\n".join(names)
+
+
+def _send_member_action(event, room, members, destination=None):
+    """รอ ack ในเธรดแยก ให้ตารางกับปุ่มยังตอบสนองระหว่างรอเซิร์ฟเวอร์"""
+    if not require_connection():
+        return
+    if state.get("room") != room:
+        messagebox.showwarning("⚠️ ห้องเปลี่ยนแล้ว", "กรุณาเลือกสมาชิกจากห้องปัจจุบันใหม่อีกครั้ง")
+        return
+    if state.get("member_action_pending"):
+        return
+    payload = {"targets": [m["sid"] for m in members], "room": room,
+               "by": state.get("admin_name", "")}
+    if destination is not None:
+        payload["destination"] = destination
+    state["member_action_pending"] = True
+    set_status("⏳ กำลังจัดการสมาชิก รอผลจากเซิร์ฟเวอร์...", C["amber"])
+
+    def apply_result(result):
+        state["member_action_pending"] = False
+        if not result.get("ok"):
+            msg = result.get("msg") or "จัดการสมาชิกไม่สำเร็จ กรุณารีเฟรชรายชื่อแล้วลองใหม่"
+            set_status(msg, C["red"])
+            messagebox.showwarning("⚠️ จัดการสมาชิกไม่สำเร็จ", msg)
+            return
+        count = result.get("count", len(members))
+        msg = result.get("msg") or (
+            f"ย้ายสมาชิก {count} คนไปห้อง {destination} แล้ว" if destination is not None
+            else f"เตะสมาชิก {count} คนออกจากห้องแล้ว")
+        skipped = result.get("skipped") or []
+        set_status(msg, C["amber"] if skipped else C["green"])
+        if skipped:
+            messagebox.showwarning("⚠️ จัดการสมาชิกได้บางส่วน",
+                                   f"{msg}\nมี {len(skipped)} คนที่ไม่สำเร็จ "
+                                   "(อาจหลุดการเชื่อมต่อหรือย้ายห้องไปแล้ว)\n"
+                                   "ตรวจรายชื่อปัจจุบันก่อนดำเนินการอีกครั้ง")
+
+    def work():
+        try:
+            result = sio.call(event, payload, timeout=10)
+            if not isinstance(result, dict):
+                result = {"ok": False, "msg": "เซิร์ฟเวอร์ยังไม่รองรับการจัดการสมาชิก "
+                          "กรุณาอัปเดตเซิร์ฟเวอร์ก่อน"}
+        except socketio.exceptions.TimeoutError:
+            result = {"ok": False, "msg": "ยังไม่ได้รับคำตอบจากเซิร์ฟเวอร์\n"
+                      "ตรวจรายชื่อห้องก่อนลองซ้ำ เพราะคำสั่งอาจดำเนินการไปแล้ว"}
+        except Exception:
+            result = {"ok": False, "msg": "การเชื่อมต่อขัดข้อง\n"
+                      "รอเชื่อมต่อใหม่และตรวจรายชื่อห้องก่อนลองซ้ำ"}
+        root.after(0, apply_result, result)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def kick_selected_members():
+    selected = _selected_manage_members("เตะสมาชิกออกจากห้อง")
+    if selected is None:
+        return
+    room, members = selected
+    if messagebox.askyesno("⛔ ยืนยันเตะสมาชิกออกจากห้อง",
+                          f"เตะสมาชิก {len(members)} คนออกจากห้อง {room} ใช่หรือไม่?\n\n"
+                          f"{_member_names_text(members)}\n\n"
+                          "สมาชิกจะกลับไปหน้าเลือกห้อง และการเรียกที่ยังรอยืนยันจะถูกยกเลิก"):
+        _send_member_action("kick_members", room, members)
+
+
+def move_selected_members():
+    selected = _selected_manage_members("ย้ายสมาชิก")
+    if selected is None:
+        return
+    room, members = selected
+    destinations = [r["name"] for r in sorted_rooms(state.get("rooms") or [])
+                    if r.get("name") and r["name"] != room]
+    if not destinations:
+        messagebox.showwarning("⚠️ ยังไม่มีห้องปลายทาง", "กรุณาสร้างห้องอื่นก่อนย้ายสมาชิก")
+        return
+    win = tk.Toplevel(root)
+    win.title("↪ ย้ายสมาชิกไปห้องอื่น")
+    win.configure(bg=C["bg"])
+    win.transient(root)
+    win.resizable(False, False)
+    tk.Label(win, text=f"ย้ายสมาชิก {len(members)} คนจากห้อง {room}",
+             font=F_HEAD, bg=C["bg"], fg=C["gold_light"], wraplength=480).pack(padx=24, pady=(20, 10))
+    tk.Label(win, text=_member_names_text(members), font=F_NORMAL, justify="left",
+             bg=C["bg"], fg=C["text"], wraplength=480).pack(padx=24, anchor="w")
+    tk.Label(win, text="เลือกห้องปลายทาง", font=F_BOLD,
+             bg=C["bg"], fg=C["text"]).pack(padx=24, pady=(16, 6), anchor="w")
+    destination = tk.StringVar(value=destinations[0])
+    choice = ttk.Combobox(win, textvariable=destination, values=destinations,
+                          state="readonly", font=F_NORMAL, width=40)
+    choice.pack(padx=24, fill="x")
+
+    def submit():
+        target = destination.get()
+        if state.get("room") != room:
+            win.destroy()
+            messagebox.showwarning("⚠️ ห้องเปลี่ยนแล้ว", "กรุณาเลือกสมาชิกจากห้องปัจจุบันใหม่อีกครั้ง")
+            return
+        if target not in {r.get("name") for r in state.get("rooms") or []} or target == room:
+            messagebox.showwarning("⚠️ ไม่พบห้องปลายทาง", "ห้องที่เลือกอาจถูกลบไปแล้ว กรุณาเลือกใหม่", parent=win)
+            return
+        if not messagebox.askyesno("↪ ยืนยันย้ายสมาชิก",
+                                  f"ย้ายสมาชิก {len(members)} คนจาก {room} ไป {target} ใช่หรือไม่?\n\n"
+                                  "การเรียกที่ยังรอยืนยันจะนับเวลาต่อจากเดิม", parent=win):
+            return
+        win.destroy()
+        _send_member_action("move_members", room, members, target)
+
+    buttons = tk.Frame(win, bg=C["bg"])
+    buttons.pack(pady=20)
+    ttk.Button(buttons, text="ย้ายสมาชิก", command=submit).pack(side="left", padx=8)
+    ttk.Button(buttons, text="ยกเลิก", command=win.destroy).pack(side="left", padx=8)
+    win.bind("<Escape>", lambda _e: win.destroy())
+    win.grab_set()
+    choice.focus_set()
 
 
 def force_rescan():
